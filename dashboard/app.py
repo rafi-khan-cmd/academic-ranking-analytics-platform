@@ -10,6 +10,14 @@ from pathlib import Path
 # Add scripts directory to path
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
+# Check database availability
+try:
+    from dashboard.utils.db_utils import check_database_available
+    db_available, db_message = check_database_available()
+except Exception as e:
+    db_available = False
+    db_message = f"Database check failed: {str(e)}"
+
 # Page configuration
 st.set_page_config(
     page_title="Academic Rankings Intelligence Platform",
@@ -44,6 +52,19 @@ st.markdown("""
 # Main header
 st.markdown('<h1 class="main-header">Academic Rankings Intelligence Platform</h1>', unsafe_allow_html=True)
 st.markdown('<p class="subtitle">A Python, PostgreSQL, and Streamlit analytics platform for modeling, simulating, and explaining global university ranking methodologies</p>', unsafe_allow_html=True)
+
+# Database status warning
+if not db_available:
+    st.warning(f"⚠️ {db_message}")
+    st.info("""
+    **To get started:**
+    1. Set up a PostgreSQL database (local or cloud)
+    2. Configure database credentials in Streamlit Cloud secrets
+    3. Run the data pipeline: `python scripts/run_pipeline.py --institutions 200`
+    4. Or use sample data: `python scripts/create_sample_data.py`
+    
+    See `NEXT_STEPS.md` for detailed instructions.
+    """)
 
 # Sidebar navigation
 st.sidebar.title("Navigation")
