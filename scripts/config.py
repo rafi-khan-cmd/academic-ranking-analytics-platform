@@ -185,8 +185,26 @@ class DBConfigProxy:
 DB_CONFIG: Dict[str, Any] = DBConfigProxy()
 
 # OpenAlex API configuration
-OPENALEX_EMAIL = os.getenv("OPENALEX_EMAIL", "")
+OPENALEX_API_KEY = get_config_value("OPENALEX_API_KEY") or os.getenv("OPENALEX_API_KEY", "")
+OPENALEX_EMAIL = get_config_value("OPENALEX_EMAIL") or os.getenv("OPENALEX_EMAIL", "")
 OPENALEX_BASE_URL = "https://api.openalex.org"
+
+# Crossref API configuration
+CROSSREF_MAILTO = get_config_value("CROSSREF_MAILTO") or os.getenv("CROSSREF_MAILTO", "")
+CROSSREF_BASE_URL = "https://api.crossref.org"
+
+# Semantic Scholar API configuration
+SEMANTIC_SCHOLAR_API_KEY = get_config_value("SEMANTIC_SCHOLAR_API_KEY") or os.getenv("SEMANTIC_SCHOLAR_API_KEY", "")
+SEMANTIC_SCHOLAR_BASE_URL = "https://api.semanticscholar.org"
+
+# ROR API configuration
+ROR_API_BASE_URL = "https://api.ror.org"
+
+# Pipeline configuration
+DEFAULT_INSTITUTION_COUNT = int(os.getenv("DEFAULT_INSTITUTION_COUNT", "200"))
+DEFAULT_YEARS_BACK = int(os.getenv("DEFAULT_YEARS_BACK", "5"))
+ENABLE_CROSSREF = os.getenv("ENABLE_CROSSREF", "false").lower() == "true"
+ENABLE_SEMANTIC_SCHOLAR = os.getenv("ENABLE_SEMANTIC_SCHOLAR", "false").lower() == "true"
 
 # Methodology definitions
 METHODOLOGIES = {

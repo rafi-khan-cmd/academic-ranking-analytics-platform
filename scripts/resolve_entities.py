@@ -135,8 +135,11 @@ def get_ror_metadata(ror_id: str) -> Optional[Dict[str, Any]]:
     return None
 
 
-def find_canonical_name(institution_name: str, ror_id: Optional[str] = None,
-                        threshold: int = 85) -> Tuple[Optional[str], Optional[str]]:
+def find_canonical_name(
+    institution_name: str,
+    ror_id: Optional[str] = None,
+    threshold: int = 85
+) -> Tuple[Optional[str], Optional[str], str, float]:
     """
     Find canonical name for an institution using ROR API and fuzzy matching.
     
@@ -146,7 +149,9 @@ def find_canonical_name(institution_name: str, ror_id: Optional[str] = None,
         threshold: Minimum similarity score (0-100) for fuzzy matching
     
     Returns:
-        Tuple of (canonical_name, ror_id)
+        Tuple of (canonical_name, ror_id, match_method, confidence)
+        match_method: 'exact_ror', 'ror_search', 'exact_mapping', 'fuzzy_mapping', 'none'
+        confidence: 0-100 score
     """
     # First, try ROR API if ROR ID is available
     if ror_id:
@@ -154,8 +159,8 @@ def find_canonical_name(institution_name: str, ror_id: Optional[str] = None,
         if ror_data:
             canonical = ror_data.get("name")
             if canonical:
-                logger.debug(f"Found canonical name via ROR: {canonical}")
-                return canonical, ror_id
+                logger.debug(f"Found canonical name via ROR ID: {canonical}")
+                return canonical, ror_id, "exact_ror", 100.0
     
     # Try ROR search API
     ror_result = search_ror_api(institution_name)
@@ -163,13 +168,15 @@ def find_canonical_name(institution_name: str, ror_id: Optional[str] = None,
         canonical = ror_result.get("name")
         found_ror_id = ror_result.get("id", "").split("/")[-1]
         if canonical:
-            logger.debug(f"Found canonical name via ROR search: {canonical}")
-            return canonical, found_ror_id
+            # Calculate confidence based on name similarity
+            similarity = fuzz.ratio(institution_name.lower(), canonical.lower())
+            logger.debug(f"Found canonical name via ROR search: {canonical} (confidence: {similarity})")
+            return canonical, found_ror_id, "ror_search", float(similarity)
     
     # Check exact matches in canonical mappings
     for canonical, variations in CANONICAL_MAPPINGS.items():
         if institution_name.lower() in [v.lower() for v in variations]:
-            return canonical, ror_id
+            return canonical, ror_id, "exact_mapping", 100.0
     
     # Try fuzzy matching against known mappings
     best_match = process.extractOne(
@@ -180,10 +187,11 @@ def find_canonical_name(institution_name: str, ror_id: Optional[str] = None,
     )
     
     if best_match:
-        return best_match[0], ror_id
+        canonical, score, _ = best_match
+        return canonical, ror_id, "fuzzy_mapping", float(score)
     
     # If no match found, use the original name as canonical
-    return institution_name, ror_id
+    return institution_name, ror_id, "none", 0.0
 
 
 def resolve_institution_entities(raw_institutions: List[Dict]) -> List[Dict]:
@@ -219,7 +227,9 @@ def resolve_institution_entities(raw_institutions: List[Dict]) -> List[Dict]:
         country_name = normalize_country_name(country_code, inst.get("country"))
         
         # Find canonical name using ROR API and fuzzy matching
-        canonical_name, resolved_ror_id = find_canonical_name(display_name, ror_id=ror_id)
+        canonical_name, resolved_ror_id, match_method, confidence = find_canonical_name(
+            display_name, ror_id=ror_id
+        )
         
         # Use resolved ROR ID if found
         final_ror_id = resolved_ror_id or ror_id
@@ -236,6 +246,8 @@ def resolve_institution_entities(raw_institutions: List[Dict]) -> List[Dict]:
             "institution_type": inst.get("type"),
             "openalex_id": openalex_id,
             "ror_id": final_ror_id,
+            "match_method": match_method,
+            "match_confidence": confidence,
             "raw_data": inst  # Keep raw data for reference
         }
         

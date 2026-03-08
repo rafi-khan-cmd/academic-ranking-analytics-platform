@@ -168,3 +168,134 @@ CREATE TABLE IF NOT EXISTS country_summary (
 
 CREATE INDEX idx_country_summary_country ON country_summary(country);
 CREATE INDEX idx_country_summary_methodology ON country_summary(methodology_name);
+
+-- Institution resolution table (for ROR entity resolution tracking)
+CREATE TABLE IF NOT EXISTS institution_resolution (
+    resolution_id SERIAL PRIMARY KEY,
+    institution_id INTEGER REFERENCES institutions(institution_id) ON DELETE CASCADE,
+    openalex_id VARCHAR(100) NOT NULL,
+    openalex_name VARCHAR(500) NOT NULL,
+    ror_id VARCHAR(100),
+    resolved_name VARCHAR(500),
+    canonical_name VARCHAR(500),
+    match_method VARCHAR(50), -- 'exact', 'fuzzy', 'ror_api', 'manual'
+    match_confidence NUMERIC(5, 2), -- 0-100
+    country VARCHAR(100),
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    UNIQUE(openalex_id)
+);
+
+CREATE INDEX idx_resolution_openalex_id ON institution_resolution(openalex_id);
+CREATE INDEX idx_resolution_ror_id ON institution_resolution(ror_id);
+CREATE INDEX idx_resolution_institution_id ON institution_resolution(institution_id);
+
+-- Topics table (OpenAlex topics/subjects)
+CREATE TABLE IF NOT EXISTS topics (
+    topic_id SERIAL PRIMARY KEY,
+    openalex_topic_id VARCHAR(100) NOT NULL UNIQUE,
+    topic_name VARCHAR(500) NOT NULL,
+    domain VARCHAR(200),
+    field VARCHAR(200),
+    subfield VARCHAR(200),
+    custom_subject_group VARCHAR(100), -- Maps to dashboard subject groups
+    works_count INTEGER DEFAULT 0,
+    cited_by_count INTEGER DEFAULT 0,
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+);
+
+CREATE INDEX idx_topics_name ON topics(topic_name);
+CREATE INDEX idx_topics_domain ON topics(domain);
+CREATE INDEX idx_topics_subject_group ON topics(custom_subject_group);
+
+-- Works table (publication-level data from OpenAlex)
+CREATE TABLE IF NOT EXISTS works (
+    work_id SERIAL PRIMARY KEY,
+    openalex_work_id VARCHAR(100) NOT NULL UNIQUE,
+    title TEXT,
+    publication_year INTEGER,
+    publication_date DATE,
+    doi VARCHAR(500),
+    work_type VARCHAR(100),
+    cited_by_count INTEGER DEFAULT 0,
+    source_name VARCHAR(500), -- Journal/venue name
+    source_id VARCHAR(100), -- OpenAlex source ID
+    language VARCHAR(10),
+    is_retracted BOOLEAN DEFAULT FALSE,
+    is_paratext BOOLEAN DEFAULT FALSE,
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+);
+
+CREATE INDEX idx_works_openalex_id ON works(openalex_work_id);
+CREATE INDEX idx_works_year ON works(publication_year);
+CREATE INDEX idx_works_doi ON works(doi);
+CREATE INDEX idx_works_type ON works(work_type);
+CREATE INDEX idx_works_cited_by ON works(cited_by_count);
+
+-- Work topics junction table (many-to-many relationship)
+CREATE TABLE IF NOT EXISTS work_topics (
+    work_topic_id SERIAL PRIMARY KEY,
+    work_id INTEGER NOT NULL REFERENCES works(work_id) ON DELETE CASCADE,
+    topic_id INTEGER NOT NULL REFERENCES topics(topic_id) ON DELETE CASCADE,
+    score NUMERIC(5, 4), -- Relevance score from OpenAlex
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    UNIQUE(work_id, topic_id)
+);
+
+CREATE INDEX idx_work_topics_work ON work_topics(work_id);
+CREATE INDEX idx_work_topics_topic ON work_topics(topic_id);
+
+-- Institution works junction table (many-to-many relationship)
+CREATE TABLE IF NOT EXISTS institution_works (
+    institution_work_id SERIAL PRIMARY KEY,
+    institution_id INTEGER NOT NULL REFERENCES institutions(institution_id) ON DELETE CASCADE,
+    work_id INTEGER NOT NULL REFERENCES works(work_id) ON DELETE CASCADE,
+    is_primary BOOLEAN DEFAULT FALSE, -- Primary affiliation vs secondary
+    author_position INTEGER, -- Author order if available
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    UNIQUE(institution_id, work_id)
+);
+
+CREATE INDEX idx_institution_works_inst ON institution_works(institution_id);
+CREATE INDEX idx_institution_works_work ON institution_works(work_id);
+
+-- API ingestion log table (for tracking ingestion runs)
+CREATE TABLE IF NOT EXISTS api_ingestion_log (
+    log_id SERIAL PRIMARY KEY,
+    source_name VARCHAR(100) NOT NULL, -- 'openalex', 'ror', 'crossref', 'semantic_scholar'
+    entity_type VARCHAR(100) NOT NULL, -- 'institution', 'work', 'topic', 'enrichment'
+    started_at TIMESTAMP NOT NULL,
+    completed_at TIMESTAMP,
+    status VARCHAR(50) NOT NULL, -- 'running', 'completed', 'failed', 'partial'
+    records_fetched INTEGER DEFAULT 0,
+    records_processed INTEGER DEFAULT 0,
+    records_failed INTEGER DEFAULT 0,
+    notes TEXT,
+    config_json JSONB, -- Store configuration used for this run
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+);
+
+CREATE INDEX idx_ingestion_log_source ON api_ingestion_log(source_name);
+CREATE INDEX idx_ingestion_log_status ON api_ingestion_log(status);
+CREATE INDEX idx_ingestion_log_started ON api_ingestion_log(started_at);
+
+-- Benchmark rankings table (for external ranking tables)
+CREATE TABLE IF NOT EXISTS benchmark_rankings (
+    benchmark_id SERIAL PRIMARY KEY,
+    benchmark_source VARCHAR(100) NOT NULL, -- 'ARWU', 'QS', 'THE', 'USNews', etc.
+    year INTEGER NOT NULL,
+    institution_name_raw VARCHAR(500) NOT NULL, -- Original name from source
+    canonical_name VARCHAR(500), -- Resolved canonical name
+    institution_id INTEGER REFERENCES institutions(institution_id) ON DELETE SET NULL,
+    rank INTEGER,
+    score NUMERIC(10, 4),
+    metadata_json JSONB, -- Additional fields from source
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+);
+
+CREATE INDEX idx_benchmark_source ON benchmark_rankings(benchmark_source);
+CREATE INDEX idx_benchmark_year ON benchmark_rankings(year);
+CREATE INDEX idx_benchmark_institution_id ON benchmark_rankings(institution_id);
+CREATE INDEX idx_benchmark_rank ON benchmark_rankings(rank);

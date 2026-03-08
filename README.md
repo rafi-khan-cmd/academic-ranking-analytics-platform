@@ -85,31 +85,75 @@ Public Deployment
 
 ### Primary Data Source: OpenAlex API (Real-Time)
 
-The platform uses **real-time API calls** to the [OpenAlex API](https://openalex.org/) to fetch:
-- Institution metadata (name, country, type, ROR IDs)
-- Publication counts and citation data from `/works` endpoint
-- Research works and authorship information
-- Subject classifications via concepts/topics
-- Yearly publication and citation trends
+The platform uses **real-time API calls** to the [OpenAlex API](https://openalex.org/) as the primary data source. OpenAlex provides comprehensive academic data including institutions, works (publications), topics, authors, and sources.
 
 **API Endpoints Used:**
-- `/institutions` - Institution discovery and metadata
-- `/works` - Publication and citation data (most important endpoint)
-- `/concepts` - Subject/topic classifications
+- `/institutions` - Institution discovery and metadata (works_count, cited_by_count, type, country)
+- `/works` - Publication and citation data (publication_year, cited_by_count, DOI, topics, authorships)
+- `/topics` - Subject/topic classifications (preferred over deprecated concepts)
+- `/authors` - Author metadata (optional)
+- `/sources` - Journal/venue metadata (optional)
+
+**OpenAlex API Configuration:**
+- API keys are **required** and free from [OpenAlex](https://openalex.org/)
+- Set `OPENALEX_API_KEY` in environment variables or `.env` file
+- Set `OPENALEX_EMAIL` for polite API usage (recommended)
+- The pipeline includes automatic retry/backoff, caching, and checkpointing
+
+**Key Features:**
+- Configurable institution count (default: 200)
+- Year-window filtering (default: last 5 years)
+- Pagination and rate limiting
+- Caching for reproducibility
+- Checkpointing for resumable ingestion
 
 ### Secondary Data Source: ROR API (Entity Resolution)
 
 The platform integrates with the [ROR API](https://ror.org/) for:
-- Institution name standardization
-- Canonical name resolution
+- Institution name standardization and canonical name resolution
 - Entity disambiguation (e.g., MIT vs Massachusetts Institute of Technology)
 - Enhanced metadata validation
+- Confidence scoring for resolution matches
+
+**ROR Integration:**
+- Automatic ROR ID lookup from OpenAlex data
+- ROR search API for institutions without ROR IDs
+- Match method tracking (exact_ror, ror_search, fuzzy_mapping, etc.)
+- Confidence scores (0-100) for all resolutions
+
+### Optional Enrichment: Crossref API
+
+**Crossref enrichment** is an optional layer that enriches works with DOI-based metadata:
+- Journal/container title
+- Publisher information
+- Publication dates
+- Funder metadata
+- Subject classifications
+
+**Configuration:**
+- Set `CROSSREF_MAILTO` in environment variables (required for polite API usage)
+- Enable with `--enable-crossref` flag or `ENABLE_CROSSREF=true`
+- Respects Crossref rate limits automatically
+
+### Optional Enrichment: Semantic Scholar API
+
+**Semantic Scholar enrichment** provides influence and citation metrics:
+- `influentialCitationCount` - Highly cited papers
+- Enhanced citation counts
+- Author influence proxies
+- Citation network data
+
+**Configuration:**
+- Set `SEMANTIC_SCHOLAR_API_KEY` in environment variables (optional, free tier available)
+- Enable with `--enable-semantic-scholar` flag or `ENABLE_SEMANTIC_SCHOLAR=true`
+- Free tier has rate limits (100 requests/day)
 
 **Why Real-Time APIs?**
 - Always up-to-date data
 - No manual dataset maintenance
 - Scalable to any number of institutions
 - Production-ready data pipeline
+- Optional enrichment layers for enhanced insights
 
 ### Entity Resolution
 
@@ -218,17 +262,30 @@ Groups institutions into distinct research profiles:
 
 The PostgreSQL database includes:
 
+**Core Tables:**
 - **institutions**: Institution metadata and canonical names
-- **subjects**: Academic subject classifications
-- **raw_metrics**: Unnormalized indicator values
+- **institution_resolution**: ROR entity resolution tracking with confidence scores
+- **topics**: OpenAlex topics/subjects (preferred over deprecated concepts)
+- **works**: Publication-level data from OpenAlex
+- **work_topics**: Many-to-many relationship between works and topics
+- **institution_works**: Many-to-many relationship between institutions and works
+
+**Metrics & Rankings:**
+- **raw_metrics**: Unnormalized indicator values (institution-year and institution-subject-year)
 - **normalized_metrics**: Normalized indicator scores
 - **methodology_weights**: Methodology weight definitions
 - **ranking_results**: Computed rankings by methodology
+
+**Analytics:**
 - **institution_clusters**: Cluster assignments
 - **sensitivity_results**: Volatility analysis results
 - **country_summary**: Country-level aggregations
 
-See `sql/schema.sql` for complete schema definition.
+**Operational:**
+- **api_ingestion_log**: Tracks all API ingestion runs
+- **benchmark_rankings**: External ranking tables (ARWU, QS, THE, etc.)
+
+See `sql/schema.sql` for complete schema definition and `docs/data_dictionary.md` for detailed field descriptions.
 
 ## 🚀 Getting Started
 
@@ -253,6 +310,77 @@ source venv/bin/activate  # On Windows: venv\Scripts\activate
 ```
 
 3. **Install dependencies:**
+```bash
+pip install -r requirements.txt
+```
+
+4. **Configure environment variables:**
+Create a `.env` file in the project root:
+```bash
+# Required: Database configuration
+POSTGRES_HOST=your-supabase-host
+POSTGRES_PORT=5432
+POSTGRES_DB=postgres
+POSTGRES_USER=your-user
+POSTGRES_PASSWORD=your-password
+
+# Required: OpenAlex API
+OPENALEX_API_KEY=your-openalex-api-key
+OPENALEX_EMAIL=your-email@example.com
+
+# Optional: Crossref enrichment
+CROSSREF_MAILTO=your-email@example.com
+
+# Optional: Semantic Scholar enrichment
+SEMANTIC_SCHOLAR_API_KEY=your-s2-api-key
+
+# Optional: Pipeline configuration
+DEFAULT_INSTITUTION_COUNT=200
+DEFAULT_YEARS_BACK=5
+ENABLE_CROSSREF=false
+ENABLE_SEMANTIC_SCHOLAR=false
+```
+
+5. **Set up PostgreSQL database:**
+```bash
+# Run schema and views
+psql -h your-host -U your-user -d postgres -f sql/schema.sql
+psql -h your-host -U your-user -d postgres -f sql/views.sql
+```
+
+6. **Run the production data pipeline:**
+```bash
+# Basic run (200 institutions, last 5 years)
+python scripts/run_pipeline.py
+
+# Custom configuration
+python scripts/run_pipeline.py --institutions 300 --years-back 10
+
+# With optional enrichments
+python scripts/run_pipeline.py --enable-crossref --enable-semantic-scholar
+
+# Filter by countries
+python scripts/run_pipeline.py --countries US CA GB
+
+# Full refresh (clear cache)
+python scripts/run_pipeline.py --full-refresh
+```
+
+**Pipeline Phases:**
+1. Extract institutions from OpenAlex API
+2. Clean and standardize institution data
+3. Resolve entities with ROR API
+4. Extract topics from OpenAlex
+5. Fetch works/publications (optional but recommended)
+6. Enrich with Crossref (optional)
+7. Enrich with Semantic Scholar (optional)
+8. Build indicators from work-level data
+9. Normalize metrics
+10. Load to PostgreSQL database
+11. Compute rankings
+12. Run advanced analytics
+
+7. **Start the dashboard:**
 ```bash
 pip install -r requirements.txt
 ```
