@@ -1,6 +1,9 @@
 """
 Academic Rankings Intelligence Platform
 Main Streamlit application entry point.
+
+Note: Database configuration and connection validation is performed
+in streamlit_app.py before this module is loaded.
 """
 
 print("[APP] dashboard/app.py loaded")
@@ -12,28 +15,7 @@ from pathlib import Path
 # Add scripts directory to path
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
-# Fail-fast wrapper: Force config evaluation before any dashboard rendering
-try:
-    from scripts.config import get_db_config
-    cfg = get_db_config()
-    print(f"[CONFIG] host={cfg['host']} port={cfg['port']} user={cfg['user']}")
-except Exception as e:
-    st.error(f"Database configuration failed: {e}")
-    st.stop()
-
-# Fail-fast wrapper: Test DB connectivity once at startup
-try:
-    from scripts.database import test_connection
-    ok, msg = test_connection()
-    print(f"[DB TEST] ok={ok} msg={msg}")
-    if not ok:
-        st.error(f"Database connection failed: {msg}")
-        st.stop()
-except Exception as e:
-    st.error(f"Database connection test failed: {e}")
-    st.stop()
-
-# Check database availability for UI display
+# Check database availability for UI display (non-blocking, for status messages only)
 try:
     from dashboard.utils.db_utils import check_database_available
     db_available, db_message = check_database_available()
