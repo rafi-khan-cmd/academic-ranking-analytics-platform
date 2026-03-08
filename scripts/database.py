@@ -14,11 +14,34 @@ from scripts.config import DB_CONFIG
 logger = logging.getLogger(__name__)
 
 
+def _build_connection_string(host: str, port: int, database: str, user: str, password: str) -> str:
+    """Build PostgreSQL connection string with URL-encoded password.
+    
+    This is the shared function used by both get_db_connection_string() and create_db_engine().
+    
+    Args:
+        host: Database host
+        port: Database port
+        database: Database name
+        user: Database user
+        password: Database password (will be URL-encoded)
+    
+    Returns:
+        PostgreSQL connection string with URL-encoded password
+    """
+    from urllib.parse import quote_plus
+    password_encoded = quote_plus(password)
+    return f"postgresql://{user}:{password_encoded}@{host}:{port}/{database}"
+
+
 def get_db_connection_string() -> str:
     """Construct PostgreSQL connection string from config."""
-    return (
-        f"postgresql://{DB_CONFIG['user']}:{DB_CONFIG['password']}"
-        f"@{DB_CONFIG['host']}:{DB_CONFIG['port']}/{DB_CONFIG['database']}"
+    return _build_connection_string(
+        host=DB_CONFIG['host'],
+        port=DB_CONFIG['port'],
+        database=DB_CONFIG['database'],
+        user=DB_CONFIG['user'],
+        password=DB_CONFIG['password']
     )
 
 
@@ -91,6 +114,13 @@ def create_db_engine(port_override=None):
             "and POSTGRES_PASSWORD in Streamlit secrets or environment variables."
         )
     
+    # Startup debug log (only safe values, never password)
+    logger.info("Database connection configuration:")
+    logger.info(f"  Host: {host}")
+    logger.info(f"  Port: {port}")
+    logger.info(f"  User: {user}")
+    logger.info(f"  Database: {database}")
+    
     # Detect connection mode and validate host/user match
     try:
         mode = detect_connection_mode(host)
@@ -98,14 +128,13 @@ def create_db_engine(port_override=None):
     except ValueError as e:
         raise RuntimeError(str(e))
     
-    # URL encode password to handle special characters
-    from urllib.parse import quote_plus
-    password_encoded = quote_plus(password)
-    
-    # Build connection string from the five POSTGRES_* values
-    connection_string = (
-        f"postgresql://{user}:{password_encoded}"
-        f"@{host}:{port}/{database}"
+    # Build connection string using shared function (password is URL-encoded inside)
+    connection_string = _build_connection_string(
+        host=host,
+        port=port,
+        database=database,
+        user=user,
+        password=password
     )
     
     # For Transaction Pooler (port 6543), add pgbouncer parameter
@@ -115,19 +144,10 @@ def create_db_engine(port_override=None):
         logger.debug("Added pgbouncer=true parameter")
     
     # Supabase connection settings - always use SSL require
-    ssl_mode = "require"
     connect_args = {
         "connect_timeout": 15,
-        "sslmode": ssl_mode
+        "sslmode": "require"
     }
-    
-    # Safe debug log (never log password)
-    logger.info("Database connection configuration:")
-    logger.info(f"  Host: {host}")
-    logger.info(f"  Port: {port}")
-    logger.info(f"  User: {user}")
-    logger.info(f"  Mode: {mode}")
-    logger.info(f"  SSL: {ssl_mode}")
     
     engine = create_engine(
         connection_string,
@@ -188,6 +208,14 @@ def test_connection() -> Tuple[bool, str]:
     user = DB_CONFIG['user']
     database = DB_CONFIG['database']
     
+    # Hard failure if host is localhost - env vars were not loaded
+    if host == "localhost":
+        raise RuntimeError(
+            "Database host is 'localhost'. Environment variables were not loaded. "
+            "Please set POSTGRES_HOST, POSTGRES_PORT, POSTGRES_DB, POSTGRES_USER, "
+            "and POSTGRES_PASSWORD in Streamlit secrets or environment variables."
+        )
+    
     # Detect connection mode for logging
     try:
         mode = detect_connection_mode(host)
@@ -196,7 +224,7 @@ def test_connection() -> Tuple[bool, str]:
     
     logger.info(f"Testing connection: {user}@{host}:{port}/{database} (mode: {mode})")
     
-    # Use only the configured host/port - no fallbacks
+    # Use only the configured host/port - no fallbacks, no alternate ports
     try:
         engine = create_db_engine()
         with engine.connect() as conn:
