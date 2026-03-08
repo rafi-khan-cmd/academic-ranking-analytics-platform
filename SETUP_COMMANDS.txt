@@ -1,0 +1,30 @@
+# Commands to Run (Copy and paste these one by one)
+
+# 1. Create virtual environment
+python3 -m venv venv
+
+# 2. Activate virtual environment
+source venv/bin/activate
+
+# 3. Upgrade pip
+pip install --upgrade pip
+
+# 4. Install all dependencies
+pip install -r requirements.txt
+
+# 5. Make sure .env file has your Supabase password
+# Edit .env and replace YOUR_PASSWORD_HERE with your actual password
+
+# 6. Generate sample data
+PYTHONPATH=$(pwd) python scripts/create_sample_data.py
+
+# 7. Load data to database
+PYTHONPATH=$(pwd) python scripts/load_to_postgres.py
+
+# 8. Compute rankings
+PYTHONPATH=$(pwd) python scripts/ranking_engine.py
+
+# 9. Run advanced analytics
+PYTHONPATH=$(pwd) python scripts/advanced_analytics.py
+
+# Done! Check your dashboard now.

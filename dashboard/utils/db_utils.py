@@ -23,42 +23,38 @@ def get_db_connection():
 
 def check_database_available():
     """Check if database is available and has data."""
+    from scripts.database import test_connection
+    
+    # Test connection with fallback ports
+    connected, conn_message = test_connection()
+    if not connected:
+        # Provide specific guidance based on error
+        if "connection refused" in conn_message.lower() or "could not connect" in conn_message.lower():
+            return False, (
+                "⚠️ Connection refused. Enable connection pooling in Supabase:\n\n"
+                "1. Go to: https://supabase.com/dashboard\n"
+                "2. Select your project\n"
+                "3. Settings → Database → Connection Pooling\n"
+                "4. Enable 'Connection Pooling'\n"
+                "5. Use port 6543 in Streamlit secrets\n\n"
+                "Or whitelist IPs for direct connection (port 5432)."
+            )
+        return False, conn_message
+    
+    # Query for data
     try:
-        # Test connection first
         engine = create_db_engine()
-        try:
-            with engine.connect() as conn:
-                conn.execute(text("SELECT 1"))
-        except Exception as conn_error:
-            error_msg = str(conn_error).lower()
-            if "could not connect" in error_msg or "connection refused" in error_msg:
-                return False, "Connection refused. Update Streamlit Cloud secrets: use port 6543 for Supabase."
-            elif "authentication" in error_msg or "password" in error_msg:
-                return False, "Authentication failed. Check password in Streamlit Cloud secrets."
-            elif "timeout" in error_msg:
-                return False, "Connection timeout. Check host and port in secrets."
-            else:
-                return False, f"Connection error: {str(conn_error)[:100]}"
-        
-        # Query for data
-        try:
-            with engine.connect() as conn:
-                result = conn.execute(text("SELECT COUNT(*) FROM institutions"))
-                count = result.fetchone()[0]
-                if count == 0:
-                    return False, "Database is empty. Run: python scripts/create_sample_data.py && python scripts/load_to_postgres.py"
-                return True, f"Database connected with {count} institutions."
-        except Exception as query_error:
-            error_msg = str(query_error).lower()
-            if "does not exist" in error_msg or "relation" in error_msg:
-                return False, "Schema not created. Run sql/schema.sql in Supabase SQL Editor."
-            return False, f"Query error: {str(query_error)[:100]}"
-    except Exception as e:
-        error_msg = str(e).lower()
-        logger.error(f"Database check error: {e}")
-        if "connection" in error_msg or "refused" in error_msg:
-            return False, "Cannot connect. Verify Streamlit Cloud secrets use port 6543."
-        return False, f"Database error: {str(e)[:150]}"
+        with engine.connect() as conn:
+            result = conn.execute(text("SELECT COUNT(*) FROM institutions"))
+            count = result.fetchone()[0]
+            if count == 0:
+                return False, "Database is empty. Run: python scripts/create_sample_data.py && python scripts/load_to_postgres.py"
+            return True, f"✅ Database connected with {count} institutions."
+    except Exception as query_error:
+        error_msg = str(query_error).lower()
+        if "does not exist" in error_msg or "relation" in error_msg:
+            return False, "Schema not created. Run sql/schema.sql in Supabase SQL Editor."
+        return False, f"Query error: {str(query_error)[:100]}"
 
 
 def fetch_top_rankings(methodology: str = "Balanced Model", limit: int = 20, 
