@@ -3,112 +3,37 @@ Academic Rankings Intelligence Platform
 Main Streamlit application entry point.
 """
 
+print("[APP] dashboard/app.py loaded")
+
 import streamlit as st
 import sys
 from pathlib import Path
-import logging
 
 # Add scripts directory to path
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
-# Configure logging
-logging.basicConfig(level=logging.INFO)
-logger = logging.getLogger(__name__)
-
-# Import config and database modules explicitly
-from scripts.config import get_config_value
-from scripts.database import create_db_engine
-
-# Startup validation: Check for required database credentials
-def validate_database_credentials():
-    """Validate that all required database credentials are present.
-    
-    Raises:
-        SystemExit: If any credential is missing, stops the app with clear error message.
-    """
-    required_keys = [
-        "POSTGRES_HOST",
-        "POSTGRES_PORT", 
-        "POSTGRES_DB",
-        "POSTGRES_USER",
-        "POSTGRES_PASSWORD"
-    ]
-    
-    missing_keys = []
-    credentials = {}
-    
-    for key in required_keys:
-        value = get_config_value(key)
-        if not value:
-            missing_keys.append(key)
-        else:
-            credentials[key] = value
-    
-    if missing_keys:
-        # Log error (safe values only)
-        logger.error(f"Missing database credentials: {', '.join(missing_keys)}")
-        
-        # Show clear error in UI and stop the app
-        st.error("""
-        ## ❌ Database Configuration Error
-        
-        **Database credentials were not loaded from Streamlit Cloud secrets.**
-        
-        Missing credentials: """ + ", ".join(missing_keys) + """
-        
-        **To fix:**
-        1. Go to Streamlit Cloud → Your app → Settings → Secrets
-        2. Add the following secrets:
-           - POSTGRES_HOST
-           - POSTGRES_PORT
-           - POSTGRES_DB
-           - POSTGRES_USER
-           - POSTGRES_PASSWORD
-        3. Verify the app file is `dashboard/app.py` and POSTGRES_* secrets are set.
-        4. Wait for the app to redeploy
-        """)
-        st.stop()
-    
-    # Startup debug log (server logs only, not UI) - safe values only
-    host = credentials.get("POSTGRES_HOST", "NOT SET")
-    port = credentials.get("POSTGRES_PORT", "NOT SET")
-    user = credentials.get("POSTGRES_USER", "NOT SET")
-    logger.info(f"[STARTUP] Database credentials loaded: host={host} port={port} user={user}")
-    
-    # Additional validation: check for localhost
-    if host == "localhost":
-        logger.error("Database host is localhost - credentials not loaded correctly")
-        st.error("""
-        ## ❌ Database Configuration Error
-        
-        **Database host incorrectly set to localhost.**
-        
-        Supabase credentials were not loaded from Streamlit Cloud secrets.
-        
-        **To fix:**
-        1. Verify POSTGRES_HOST in Streamlit Cloud secrets is set to your Supabase host
-        2. Verify the app file is `dashboard/app.py` and POSTGRES_* secrets are set.
-        3. Wait for the app to redeploy
-        """)
-        st.stop()
-    
-    return credentials
-
-# Validate credentials at startup
+# Fail-fast wrapper: Force config evaluation before any dashboard rendering
 try:
-    db_credentials = validate_database_credentials()
+    from scripts.config import get_db_config
+    cfg = get_db_config()
+    print(f"[CONFIG] host={cfg['host']} port={cfg['port']} user={cfg['user']}")
 except Exception as e:
-    logger.error(f"Credential validation failed: {e}")
-    st.error(f"""
-    ## ❌ Database Configuration Error
-    
-    **Failed to load database credentials: {str(e)}**
-    
-    Verify the app file is `dashboard/app.py` and POSTGRES_* secrets are set in Streamlit Cloud.
-    """)
+    st.error(f"Database configuration failed: {e}")
     st.stop()
 
-# Check database availability
+# Fail-fast wrapper: Test DB connectivity once at startup
+try:
+    from scripts.database import test_connection
+    ok, msg = test_connection()
+    print(f"[DB TEST] ok={ok} msg={msg}")
+    if not ok:
+        st.error(f"Database connection failed: {msg}")
+        st.stop()
+except Exception as e:
+    st.error(f"Database connection test failed: {e}")
+    st.stop()
+
+# Check database availability for UI display
 try:
     from dashboard.utils.db_utils import check_database_available
     db_available, db_message = check_database_available()
