@@ -8,8 +8,11 @@ from pathlib import Path
 from dotenv import load_dotenv
 from typing import Dict, Any
 
-# Load environment variables
+# Load environment variables from .env file (for local development)
 load_dotenv()
+
+# Streamlit Cloud loads secrets into os.environ automatically
+# No need for dotenv in Streamlit Cloud, but it's safe to call it
 
 # Project root directory
 PROJECT_ROOT = Path(__file__).parent.parent
@@ -27,13 +30,42 @@ def strip_quotes(value: str) -> str:
             return value[1:-1]
     return value
 
-DB_CONFIG: Dict[str, Any] = {
-    "host": strip_quotes(os.getenv("POSTGRES_HOST", "localhost")),
-    "port": int(os.getenv("POSTGRES_PORT", "5432").strip('"\'')),
-    "database": strip_quotes(os.getenv("POSTGRES_DB", "academic_rankings")),
-    "user": strip_quotes(os.getenv("POSTGRES_USER", "postgres")),
-    "password": strip_quotes(os.getenv("POSTGRES_PASSWORD", "")),
-}
+# Database configuration
+# Streamlit Cloud loads secrets into st.secrets, not environment variables
+# We need to check for st.secrets first, then fall back to environment variables
+def get_db_config() -> Dict[str, Any]:
+    """Get database configuration from Streamlit secrets or environment variables."""
+    # Try Streamlit secrets first (for Streamlit Cloud)
+    try:
+        import streamlit as st
+        if hasattr(st, 'secrets'):
+            try:
+                # Access secrets - they're available as attributes or dict-like
+                secrets = st.secrets
+                return {
+                    "host": str(secrets.get("POSTGRES_HOST", secrets.get("postgres_host", ""))).strip('"'),
+                    "port": int(str(secrets.get("POSTGRES_PORT", secrets.get("postgres_port", "5432"))).strip('"\'')),
+                    "database": str(secrets.get("POSTGRES_DB", secrets.get("postgres_db", ""))).strip('"'),
+                    "user": str(secrets.get("POSTGRES_USER", secrets.get("postgres_user", ""))).strip('"'),
+                    "password": str(secrets.get("POSTGRES_PASSWORD", secrets.get("postgres_password", ""))).strip('"'),
+                }
+            except (AttributeError, KeyError, TypeError):
+                # Secrets not available or wrong format, fall through to env vars
+                pass
+    except (ImportError, RuntimeError):
+        # Not in Streamlit environment or Streamlit not initialized
+        pass
+    
+    # Fallback to environment variables (for local development or scripts)
+    return {
+        "host": strip_quotes(os.getenv("POSTGRES_HOST", "localhost")),
+        "port": int(os.getenv("POSTGRES_PORT", "5432").strip('"\'')),
+        "database": strip_quotes(os.getenv("POSTGRES_DB", "academic_rankings")),
+        "user": strip_quotes(os.getenv("POSTGRES_USER", "postgres")),
+        "password": strip_quotes(os.getenv("POSTGRES_PASSWORD", "")),
+    }
+
+DB_CONFIG: Dict[str, Any] = get_db_config()
 
 # OpenAlex API configuration
 OPENALEX_EMAIL = os.getenv("OPENALEX_EMAIL", "")
