@@ -53,13 +53,14 @@ def get_db_config() -> Dict[str, Any]:
                 password = getattr(secrets, "POSTGRES_PASSWORD", None) or ""
                 
                 # If we got any non-empty values from secrets, use them
+                # Strip quotes from all values (Streamlit Cloud may store them with quotes)
                 if host or database or user or password:
                     return {
-                        "host": str(host).strip('"') if host else "",
-                        "port": int(str(port).strip('"\'')) if port else 5432,
-                        "database": str(database).strip('"') if database else "",
-                        "user": str(user).strip('"') if user else "",
-                        "password": str(password).strip('"') if password else "",
+                        "host": strip_quotes(str(host)) if host else "",
+                        "port": int(strip_quotes(str(port)).strip('\'')) if port else 5432,
+                        "database": strip_quotes(str(database)) if database else "",
+                        "user": strip_quotes(str(user)) if user else "",
+                        "password": strip_quotes(str(password)) if password else "",
                     }
             except (AttributeError, TypeError, RuntimeError):
                 # Secrets not available or Streamlit not initialized yet
