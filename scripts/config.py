@@ -33,11 +33,45 @@ def strip_quotes(value: str) -> str:
 # Database configuration
 # Streamlit Cloud loads secrets into st.secrets, not environment variables
 # We need to access st.secrets lazily (when called, not at import time)
+def is_pooler_host(host: str) -> bool:
+    """Check if host is a Supabase pooler host."""
+    return "pooler.supabase.com" in host.lower()
+
+
+def is_pooler_user(user: str) -> bool:
+    """Check if user is a Supabase pooler user (contains project ID)."""
+    return "." in user and user != "postgres"
+
+
+def _validate_connection_mode(host: str, user: str):
+    """Validate that host and user match the same connection mode.
+    
+    Raises:
+        ValueError: If direct host is used with pooler user or vice versa.
+    """
+    is_pooler_host_val = is_pooler_host(host)
+    is_pooler_user_val = is_pooler_user(user)
+    
+    if is_pooler_host_val and not is_pooler_user_val:
+        raise ValueError(
+            f"Connection mode mismatch: Pooler host '{host}' requires pooler-style user "
+            f"(e.g., 'postgres.PROJECT_ID'), but got direct-style user '{user}'. "
+            f"Please use the session pooler connection string from Supabase."
+        )
+    
+    if not is_pooler_host_val and is_pooler_user_val:
+        raise ValueError(
+            f"Connection mode mismatch: Direct host '{host}' requires direct-style user "
+            f"('postgres'), but got pooler-style user '{user}'. "
+            f"Please use either direct connection credentials or session pooler credentials."
+        )
+
+
 def get_db_config() -> Dict[str, Any]:
     """Get database configuration from Streamlit secrets or environment variables.
     
     This function is called lazily to ensure Streamlit is initialized.
-    Raises ValueError if any required credential is missing.
+    Raises ValueError if any required credential is missing or if connection mode is mixed.
     """
     config = {}
     
@@ -49,22 +83,25 @@ def get_db_config() -> Dict[str, Any]:
             secrets = st.secrets
             # Try attribute access (Streamlit secrets are accessed as attributes)
             try:
-                config["host"] = getattr(secrets, "POSTGRES_HOST", None)
-                config["port"] = getattr(secrets, "POSTGRES_PORT", None)
-                config["database"] = getattr(secrets, "POSTGRES_DB", None)
-                config["user"] = getattr(secrets, "POSTGRES_USER", None)
-                config["password"] = getattr(secrets, "POSTGRES_PASSWORD", None)
+                # Get all required values - only use secrets if ALL are present
+                host = getattr(secrets, "POSTGRES_HOST", None)
+                port = getattr(secrets, "POSTGRES_PORT", None)
+                database = getattr(secrets, "POSTGRES_DB", None)
+                user = getattr(secrets, "POSTGRES_USER", None)
+                password = getattr(secrets, "POSTGRES_PASSWORD", None)
                 
-                # If we got any non-empty values from secrets, use them
-                # Strip quotes from all values (Streamlit Cloud may store them with quotes)
-                if any(config.values()):
-                    return {
-                        "host": strip_quotes(str(config["host"])) if config["host"] else "",
-                        "port": int(strip_quotes(str(config["port"])).strip('\'')) if config["port"] else None,
-                        "database": strip_quotes(str(config["database"])) if config["database"] else "",
-                        "user": strip_quotes(str(config["user"])) if config["user"] else "",
-                        "password": strip_quotes(str(config["password"])) if config["password"] else "",
+                # Only use secrets if ALL required values are present
+                if all([host, port, database, user, password]):
+                    config = {
+                        "host": strip_quotes(str(host)),
+                        "port": int(strip_quotes(str(port)).strip('\'')),
+                        "database": strip_quotes(str(database)),
+                        "user": strip_quotes(str(user)),
+                        "password": strip_quotes(str(password)),
                     }
+                    # Validate connection mode consistency
+                    _validate_connection_mode(config["host"], config["user"])
+                    return config
             except (AttributeError, TypeError, RuntimeError):
                 # Secrets not available or Streamlit not initialized yet
                 pass
@@ -73,6 +110,7 @@ def get_db_config() -> Dict[str, Any]:
         pass
     
     # Fallback to environment variables (for local development or scripts)
+    # Only use the 5 required keys: POSTGRES_HOST, POSTGRES_PORT, POSTGRES_DB, POSTGRES_USER, POSTGRES_PASSWORD
     config = {
         "host": strip_quotes(os.getenv("POSTGRES_HOST", "")),
         "port": os.getenv("POSTGRES_PORT", ""),
@@ -98,6 +136,9 @@ def get_db_config() -> Dict[str, Any]:
     except (ValueError, AttributeError):
         raise ValueError(f"Invalid POSTGRES_PORT value: {config['port']}. Must be a valid integer.")
     
+    # Validate connection mode consistency
+    _validate_connection_mode(config["host"], config["user"])
+    
     return config
 
 # Lazy loading: DB_CONFIG is a property that calls get_db_config() when accessed
@@ -105,9 +146,11 @@ class DBConfigProxy:
     """Proxy object that lazily loads DB config from Streamlit secrets or env vars."""
     _config: Dict[str, Any] = None
     
-    def __getitem__(self, key: str) -> Any:
+    def _load_config(self):
+        """Load config and log startup debug info."""
         if self._config is None:
             self._config = get_db_config()
+            
             # Production safeguard: raise RuntimeError if host is localhost
             if self._config.get("host") == "localhost":
                 raise RuntimeError(
@@ -115,30 +158,26 @@ class DBConfigProxy:
                     "Please set POSTGRES_HOST, POSTGRES_PORT, POSTGRES_DB, POSTGRES_USER, "
                     "and POSTGRES_PASSWORD in Streamlit secrets or environment variables."
                 )
+            
+            # Startup debug log (only safe values, never password)
+            import logging
+            logger = logging.getLogger(__name__)
+            logger.info("Database configuration loaded:")
+            logger.info(f"  Host: {self._config.get('host')}")
+            logger.info(f"  User: {self._config.get('user')}")
+            logger.info(f"  Port: {self._config.get('port')}")
+            logger.info(f"  SSL: enabled (required)")
+    
+    def __getitem__(self, key: str) -> Any:
+        self._load_config()
         return self._config[key]
     
     def get(self, key: str, default: Any = None) -> Any:
-        if self._config is None:
-            self._config = get_db_config()
-            # Production safeguard: raise RuntimeError if host is localhost
-            if self._config.get("host") == "localhost":
-                raise RuntimeError(
-                    "Database host is 'localhost'. Supabase credentials were not loaded. "
-                    "Please set POSTGRES_HOST, POSTGRES_PORT, POSTGRES_DB, POSTGRES_USER, "
-                    "and POSTGRES_PASSWORD in Streamlit secrets or environment variables."
-                )
+        self._load_config()
         return self._config.get(key, default)
     
     def __contains__(self, key: str) -> bool:
-        if self._config is None:
-            self._config = get_db_config()
-            # Production safeguard: raise RuntimeError if host is localhost
-            if self._config.get("host") == "localhost":
-                raise RuntimeError(
-                    "Database host is 'localhost'. Supabase credentials were not loaded. "
-                    "Please set POSTGRES_HOST, POSTGRES_PORT, POSTGRES_DB, POSTGRES_USER, "
-                    "and POSTGRES_PASSWORD in Streamlit secrets or environment variables."
-                )
+        self._load_config()
         return key in self._config
 
 DB_CONFIG: Dict[str, Any] = DBConfigProxy()

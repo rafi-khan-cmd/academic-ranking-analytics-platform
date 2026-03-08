@@ -30,7 +30,7 @@ def create_db_engine(port_override=None):
     
     Raises:
         RuntimeError: If host is localhost (production safeguard)
-        ValueError: If required credentials are missing
+        ValueError: If required credentials are missing or connection mode is mixed
     """
     # Get required credentials - will raise ValueError if missing
     host = DB_CONFIG['host']
@@ -57,9 +57,6 @@ def create_db_engine(port_override=None):
         f"@{host}:{port}/{database}"
     )
     
-    # Safe debug log: only log host, never password
-    logger.info(f"Connecting to database at host: {host}")
-    
     # For Session Pooler (pooler.supabase.com), pgbouncer is handled automatically
     # For Transaction Pooler (port 6543), add pgbouncer parameter
     # Note: Session Pooler on port 5432 doesn't need explicit pgbouncer=true
@@ -67,11 +64,18 @@ def create_db_engine(port_override=None):
         connection_string += "?pgbouncer=true"
         logger.debug("Added pgbouncer=true parameter")
     
-    # Supabase connection settings - always use SSL require
+    # Supabase connection settings
+    # Force SSL require for pooler hosts, require for all others
+    is_pooler = 'pooler.supabase.com' in host.lower()
+    ssl_mode = "require"
+    
     connect_args = {
         "connect_timeout": 15,
-        "sslmode": "require"
+        "sslmode": ssl_mode
     }
+    
+    if is_pooler:
+        logger.debug("Pooler host detected - forcing SSL require")
     
     engine = create_engine(
         connection_string,
