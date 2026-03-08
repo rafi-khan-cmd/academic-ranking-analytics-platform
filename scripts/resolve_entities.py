@@ -7,7 +7,7 @@ import json
 import logging
 import requests
 from pathlib import Path
-from typing import Dict, List, Tuple, Optional
+from typing import Dict, List, Tuple, Optional, Any
 from rapidfuzz import fuzz, process
 import pycountry
 import time

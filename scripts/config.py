@@ -19,12 +19,20 @@ PROCESSED_DATA_DIR = DATA_DIR / "processed"
 EXTERNAL_DATA_DIR = DATA_DIR / "external"
 
 # Database configuration
+# Strip quotes from environment variables (Streamlit Cloud may add them)
+def strip_quotes(value: str) -> str:
+    """Remove surrounding quotes from string if present."""
+    if value and len(value) >= 2:
+        if (value.startswith('"') and value.endswith('"')) or (value.startswith("'") and value.endswith("'")):
+            return value[1:-1]
+    return value
+
 DB_CONFIG: Dict[str, Any] = {
-    "host": os.getenv("POSTGRES_HOST", "localhost"),
-    "port": int(os.getenv("POSTGRES_PORT", 5432)),
-    "database": os.getenv("POSTGRES_DB", "academic_rankings"),
-    "user": os.getenv("POSTGRES_USER", "postgres"),
-    "password": os.getenv("POSTGRES_PASSWORD", ""),
+    "host": strip_quotes(os.getenv("POSTGRES_HOST", "localhost")),
+    "port": int(os.getenv("POSTGRES_PORT", "5432").strip('"\'')),
+    "database": strip_quotes(os.getenv("POSTGRES_DB", "academic_rankings")),
+    "user": strip_quotes(os.getenv("POSTGRES_USER", "postgres")),
+    "password": strip_quotes(os.getenv("POSTGRES_PASSWORD", "")),
 }
 
 # OpenAlex API configuration

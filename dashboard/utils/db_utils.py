@@ -24,20 +24,41 @@ def get_db_connection():
 def check_database_available():
     """Check if database is available and has data."""
     try:
-        if not test_connection():
-            return False, "Database connection failed. Please check your environment variables."
-        
+        # Test connection first
         engine = create_db_engine()
-        with engine.connect() as conn:
-            # Check if institutions table exists and has data
-            result = conn.execute(text("SELECT COUNT(*) FROM institutions"))
-            count = result.fetchone()[0]
-            if count == 0:
-                return False, "Database is empty. Please run the data pipeline first."
-            return True, f"Database connected with {count} institutions."
+        try:
+            with engine.connect() as conn:
+                conn.execute(text("SELECT 1"))
+        except Exception as conn_error:
+            error_msg = str(conn_error).lower()
+            if "could not connect" in error_msg or "connection refused" in error_msg:
+                return False, "Connection refused. Update Streamlit Cloud secrets: use port 6543 for Supabase."
+            elif "authentication" in error_msg or "password" in error_msg:
+                return False, "Authentication failed. Check password in Streamlit Cloud secrets."
+            elif "timeout" in error_msg:
+                return False, "Connection timeout. Check host and port in secrets."
+            else:
+                return False, f"Connection error: {str(conn_error)[:100]}"
+        
+        # Query for data
+        try:
+            with engine.connect() as conn:
+                result = conn.execute(text("SELECT COUNT(*) FROM institutions"))
+                count = result.fetchone()[0]
+                if count == 0:
+                    return False, "Database is empty. Run: python scripts/create_sample_data.py && python scripts/load_to_postgres.py"
+                return True, f"Database connected with {count} institutions."
+        except Exception as query_error:
+            error_msg = str(query_error).lower()
+            if "does not exist" in error_msg or "relation" in error_msg:
+                return False, "Schema not created. Run sql/schema.sql in Supabase SQL Editor."
+            return False, f"Query error: {str(query_error)[:100]}"
     except Exception as e:
+        error_msg = str(e).lower()
         logger.error(f"Database check error: {e}")
-        return False, f"Database error: {str(e)}"
+        if "connection" in error_msg or "refused" in error_msg:
+            return False, "Cannot connect. Verify Streamlit Cloud secrets use port 6543."
+        return False, f"Database error: {str(e)[:150]}"
 
 
 def fetch_top_rankings(methodology: str = "Balanced Model", limit: int = 20, 

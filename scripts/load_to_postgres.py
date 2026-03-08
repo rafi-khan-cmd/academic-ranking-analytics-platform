@@ -291,8 +291,8 @@ if __name__ == "__main__":
             load_raw_metrics(indicators, institution_map)
         
         # Load normalized metrics
-        from scripts.normalize_metrics import load_normalized_metrics
-        normalized = load_normalized_metrics()
+        from scripts.normalize_metrics import load_normalized_metrics as load_normalized_from_file
+        normalized = load_normalized_from_file()
         if normalized:
             load_normalized_metrics(normalized, institution_map)
     

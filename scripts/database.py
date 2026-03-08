@@ -25,11 +25,21 @@ def get_db_connection_string() -> str:
 def create_db_engine():
     """Create SQLAlchemy engine for database operations."""
     connection_string = get_db_connection_string()
+    # Supabase requires SSL connections
+    # For connection pooling (port 6543), use 'prefer' SSL mode
+    # For direct connection (port 5432), use 'require' SSL mode
+    port = DB_CONFIG.get('port', 5432)
+    ssl_mode = "prefer" if port == 6543 else "require"
+    
+    connect_args = {
+        "connect_timeout": 10,
+        "sslmode": ssl_mode
+    }
     engine = create_engine(
         connection_string,
         poolclass=NullPool,
         echo=False,
-        connect_args={"connect_timeout": 10}
+        connect_args=connect_args
     )
     return engine
 
