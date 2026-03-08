@@ -12,7 +12,7 @@ from pathlib import Path
 # Add project root to path
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
-from scripts.database import create_db_engine
+from scripts.database import create_db_engine, detect_connection_mode
 from scripts.config import DB_CONFIG
 from sqlalchemy import text
 import logging
@@ -25,15 +25,29 @@ logger = logging.getLogger(__name__)
 def test_connection():
     """Test database connection and print result."""
     try:
-        # Get config values for error messages (without password)
-        host = DB_CONFIG.get('host', 'NOT SET')
-        port = DB_CONFIG.get('port', 'NOT SET')
-        database = DB_CONFIG.get('database', 'NOT SET')
-        user = DB_CONFIG.get('user', 'NOT SET')
+        # Get config values (will raise ValueError if missing)
+        host = DB_CONFIG['host']
+        port = DB_CONFIG['port']
+        database = DB_CONFIG['database']
+        user = DB_CONFIG['user']
         
-        logger.info(f"Testing connection to: {user}@{host}:{port}/{database}")
+        # Detect connection mode
+        try:
+            mode = detect_connection_mode(host)
+        except ValueError as e:
+            mode = f"ERROR: {str(e)}"
         
-        # Create engine
+        # Print connection info
+        print("Database Connection Test")
+        print("=" * 50)
+        print(f"Mode: {mode}")
+        print(f"Host: {host}")
+        print(f"Port: {port}")
+        print(f"User: {user}")
+        print(f"Database: {database}")
+        print()
+        
+        # Create engine (will validate host/user match)
         engine = create_db_engine()
         
         # Test connection with SELECT 1
@@ -43,10 +57,7 @@ def test_connection():
         
         # Success
         print("✅ Database connection successful!")
-        print(f"   Host: {host}")
-        print(f"   Port: {port}")
-        print(f"   Database: {database}")
-        print(f"   User: {user}")
+        print(f"   Connected to {host}:{port} using {mode} mode")
         return True
         
     except RuntimeError as e:

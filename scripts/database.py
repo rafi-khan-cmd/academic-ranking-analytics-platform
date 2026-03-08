@@ -22,6 +22,50 @@ def get_db_connection_string() -> str:
     )
 
 
+def detect_connection_mode(host: str) -> str:
+    """Detect Supabase connection mode from host.
+    
+    Returns:
+        "session_pooler" if host contains "pooler.supabase.com"
+        "direct" if host starts with "db." and contains ".supabase.co"
+        Raises ValueError if host doesn't match known patterns
+    """
+    host_lower = host.lower()
+    if "pooler.supabase.com" in host_lower:
+        return "session_pooler"
+    elif host_lower.startswith("db.") and ".supabase.co" in host_lower:
+        return "direct"
+    else:
+        raise ValueError(
+            f"Unknown Supabase host pattern: {host}. "
+            f"Expected either pooler host (pooler.supabase.com) or direct host (db.*.supabase.co)"
+        )
+
+
+def validate_host_user_mode(host: str, user: str):
+    """Validate that host and user match the same connection mode.
+    
+    Raises:
+        RuntimeError: If host/user mismatch is detected
+    """
+    mode = detect_connection_mode(host)
+    
+    if mode == "session_pooler":
+        if not user.startswith("postgres."):
+            raise RuntimeError(
+                f"Connection mode mismatch: Session pooler host '{host}' requires user "
+                f"starting with 'postgres.' (e.g., 'postgres.PROJECT_ID'), but got '{user}'. "
+                f"Please use the session pooler connection string from Supabase."
+            )
+    elif mode == "direct":
+        if user != "postgres":
+            raise RuntimeError(
+                f"Connection mode mismatch: Direct host '{host}' requires user exactly "
+                f"'postgres', but got '{user}'. "
+                f"Please use the direct connection credentials from Supabase."
+            )
+
+
 def create_db_engine(port_override=None):
     """Create SQLAlchemy engine for database operations.
     
@@ -29,8 +73,8 @@ def create_db_engine(port_override=None):
         port_override: Optional port to use instead of DB_CONFIG['port']
     
     Raises:
-        RuntimeError: If host is localhost (production safeguard)
-        ValueError: If required credentials are missing or connection mode is mixed
+        RuntimeError: If host is localhost or host/user mismatch
+        ValueError: If required credentials are missing
     """
     # Get required credentials - will raise ValueError if missing
     host = DB_CONFIG['host']
@@ -47,6 +91,13 @@ def create_db_engine(port_override=None):
             "and POSTGRES_PASSWORD in Streamlit secrets or environment variables."
         )
     
+    # Detect connection mode and validate host/user match
+    try:
+        mode = detect_connection_mode(host)
+        validate_host_user_mode(host, user)
+    except ValueError as e:
+        raise RuntimeError(str(e))
+    
     # URL encode password to handle special characters
     from urllib.parse import quote_plus
     password_encoded = quote_plus(password)
@@ -57,25 +108,26 @@ def create_db_engine(port_override=None):
         f"@{host}:{port}/{database}"
     )
     
-    # For Session Pooler (pooler.supabase.com), pgbouncer is handled automatically
     # For Transaction Pooler (port 6543), add pgbouncer parameter
-    # Note: Session Pooler on port 5432 doesn't need explicit pgbouncer=true
-    if port == 6543 and 'pooler.supabase.com' not in host:
+    # Session Pooler on port 5432 doesn't need explicit pgbouncer=true
+    if port == 6543 and mode != "session_pooler":
         connection_string += "?pgbouncer=true"
         logger.debug("Added pgbouncer=true parameter")
     
-    # Supabase connection settings
-    # Force SSL require for pooler hosts, require for all others
-    is_pooler = 'pooler.supabase.com' in host.lower()
+    # Supabase connection settings - always use SSL require
     ssl_mode = "require"
-    
     connect_args = {
         "connect_timeout": 15,
         "sslmode": ssl_mode
     }
     
-    if is_pooler:
-        logger.debug("Pooler host detected - forcing SSL require")
+    # Safe debug log (never log password)
+    logger.info("Database connection configuration:")
+    logger.info(f"  Host: {host}")
+    logger.info(f"  Port: {port}")
+    logger.info(f"  User: {user}")
+    logger.info(f"  Mode: {mode}")
+    logger.info(f"  SSL: {ssl_mode}")
     
     engine = create_engine(
         connection_string,
@@ -125,75 +177,65 @@ def execute_sql_file(engine, file_path: str) -> None:
 
 
 def test_connection() -> Tuple[bool, str]:
-    """Test database connection with fallback ports.
+    """Test database connection using only the configured host/port.
     
     Returns:
         Tuple of (success: bool, message: str)
     """
-    # Log config for debugging (without password)
-    host = DB_CONFIG.get('host', 'NOT SET')
-    port = DB_CONFIG.get('port', 'NOT SET')
-    user = DB_CONFIG.get('user', 'NOT SET')
-    database = DB_CONFIG.get('database', 'NOT SET')
-    password_set = bool(DB_CONFIG.get('password', ''))
+    # Get required credentials - will raise ValueError if missing
+    host = DB_CONFIG['host']
+    port = DB_CONFIG['port']
+    user = DB_CONFIG['user']
+    database = DB_CONFIG['database']
     
-    logger.info(f"Testing connection: {user}@{host}:{port}/{database} (password: {'SET' if password_set else 'NOT SET'})")
+    # Detect connection mode for logging
+    try:
+        mode = detect_connection_mode(host)
+    except ValueError:
+        mode = "unknown"
     
-    ports_to_try = [DB_CONFIG.get('port', 5432)]
+    logger.info(f"Testing connection: {user}@{host}:{port}/{database} (mode: {mode})")
     
-    # If using 6543 (pooling), also try 5432 (direct) as fallback
-    if ports_to_try[0] == 6543:
-        ports_to_try.append(5432)
-    # If using 5432 (direct), also try 6543 (pooling) as fallback
-    elif ports_to_try[0] == 5432:
-        ports_to_try.append(6543)
-    
-    last_error = None
-    for port in ports_to_try:
-        try:
-            engine = create_db_engine(port_override=port)
-            with engine.connect() as conn:
-                result = conn.execute(text("SELECT 1"))
-                result.fetchone()  # Actually fetch to ensure connection works
-            engine.dispose()
-            if port == DB_CONFIG.get('port', 5432):
-                logger.info(f"Database connection successful on port {port}")
-                return True, f"Connected on port {port}"
-            else:
-                logger.warning(f"Connected on fallback port {port} (configured port failed)")
-                return True, f"Connected on port {port} (fallback)"
-        except Exception as e:
-            last_error = e
-            error_str = str(e)
-            logger.error(f"Connection failed on port {port}: {error_str}")
-            # Log more details for common errors
-            if "could not translate host name" in error_str.lower():
-                logger.error(f"DNS resolution failed for host: {host}")
-            elif "connection refused" in error_str.lower():
-                logger.error(f"Connection refused - check if host {host} and port {port} are correct")
-            elif "authentication" in error_str.lower() or "password" in error_str.lower():
-                logger.error(f"Authentication failed - check user and password")
-            continue
-    
-    error_msg = str(last_error).lower() if last_error else "Unknown error"
-    full_error = str(last_error) if last_error else "No error details available"
-    
-    if "connection refused" in error_msg or "could not connect" in error_msg or "could not translate host" in error_msg:
-        message = (
-            f"Connection refused. Check:\n"
-            f"- Host: {host}\n"
-            f"- Port: {port}\n"
-            f"- Use Session Pooler connection string from Supabase"
-        )
-    elif "authentication" in error_msg or "password" in error_msg:
-        message = (
-            f"Authentication failed. Check:\n"
-            f"- User: {user} (should include project ID for pooler)\n"
-            f"- Password is correct\n"
-            f"- Full error: {full_error[:150]}"
-        )
-    else:
-        message = f"Connection failed: {full_error[:200]}"
-    
-    logger.error(f"Database connection failed: {message}")
-    return False, message
+    # Use only the configured host/port - no fallbacks
+    try:
+        engine = create_db_engine()
+        with engine.connect() as conn:
+            result = conn.execute(text("SELECT 1"))
+            result.fetchone()  # Actually fetch to ensure connection works
+        engine.dispose()
+        logger.info(f"Database connection successful")
+        return True, f"Connected to {host}:{port} (mode: {mode})"
+    except Exception as e:
+        error_str = str(e)
+        logger.error(f"Connection failed: {error_str}")
+        
+        # Provide helpful error messages
+        error_lower = error_str.lower()
+        if "connection mode mismatch" in error_lower:
+            message = f"Connection mode mismatch: {error_str}"
+        elif "connection refused" in error_lower or "could not connect" in error_lower:
+            message = (
+                f"Connection refused. Check:\n"
+                f"- Host: {host}\n"
+                f"- Port: {port}\n"
+                f"- Mode: {mode}\n"
+                f"- Verify credentials match the connection mode"
+            )
+        elif "authentication" in error_lower or "password" in error_lower:
+            message = (
+                f"Authentication failed. Check:\n"
+                f"- User: {user}\n"
+                f"- Password is correct\n"
+                f"- Mode: {mode}"
+            )
+        elif "could not translate host name" in error_lower:
+            message = (
+                f"DNS resolution failed. Check:\n"
+                f"- Host: {host}\n"
+                f"- Network connectivity"
+            )
+        else:
+            message = f"Connection failed: {error_str[:200]}"
+        
+        logger.error(f"Database connection failed: {message}")
+        return False, message
