@@ -373,7 +373,11 @@ def load_topics(topics: List[Dict]) -> Dict[str, int]:
 
 def load_works(works_data_map: Dict[str, List[Dict]], topic_map: Optional[Dict[str, int]] = None) -> Dict[str, int]:
     """Load works into database and return mapping of openalex_work_id to work_id."""
-    logger.info("Loading works...")
+    if not works_data_map:
+        logger.info("No works data to load (works_data_map is empty)")
+        return {}
+    
+    logger.info(f"Loading works from {len(works_data_map)} institutions...")
     
     engine = create_db_engine()
     work_map = {}

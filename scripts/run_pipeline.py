@@ -123,7 +123,7 @@ def run_complete_pipeline(
         save_raw_data(topics, "topics_raw.json")
         
         # Phase 5: Fetch Works Data (Optional but recommended)
-        works_data_map = None
+        works_data_map = {}  # Use empty dict instead of None
         if fetch_works:
             logger.info("\n[PHASE 5] Fetching works/publication data from OpenAlex API...")
             logger.info("This may take 10-30 minutes depending on number of institutions...")
@@ -138,10 +138,16 @@ def run_complete_pipeline(
                 use_cache=not full_refresh,
                 checkpoint_file=checkpoint_file
             )
-            log_api_ingestion("openalex", "work", "completed", records_fetched=sum(len(w) for w in works_data_map.values()))
-            logger.info(f"✓ Fetched works data for {len(works_data_map)} institutions")
+            if works_data_map:
+                log_api_ingestion("openalex", "work", "completed", records_fetched=sum(len(w) for w in works_data_map.values()))
+                logger.info(f"✓ Fetched works data for {len(works_data_map)} institutions")
+            else:
+                works_data_map = {}  # Ensure it's a dict, not None
+                log_api_ingestion("openalex", "work", "failed", notes="No works data fetched")
+                logger.warning("⚠️ No works data fetched")
         else:
             logger.info("\n[PHASE 5] Skipping works data fetch (use fetch_works=True for full data)")
+            logger.info("⚠️ No works data provided; using fallback indicator path")
         
         # Phase 6: Optional Enrichment
         if fetch_works and works_data_map:

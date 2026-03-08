@@ -240,8 +240,13 @@ def build_indicators_from_resolved_entities(
     
     all_indicators = []
     
-    # Load works data if available
+    # Handle None works_data_map - treat as empty dict
     if works_data_map is None:
+        logger.warning("No works data provided; using fallback indicator path")
+        logger.info("Indicators will use institution summary stats from OpenAlex (if available)")
+        works_data_map = {}
+        
+        # Try to load from file as fallback
         from scripts.extract_data import load_raw_data
         works_data_list = load_raw_data("institution_works_raw.json")
         if works_data_list:
@@ -249,17 +254,20 @@ def build_indicators_from_resolved_entities(
                 item.get("institution_id"): item.get("works", [])
                 for item in works_data_list
             }
-            logger.info(f"Loaded works data for {len(works_data_map)} institutions")
+            logger.info(f"Loaded works data from file for {len(works_data_map)} institutions")
+        else:
+            logger.info("No works data file found. Building indicators from institution summary stats only.")
     
     # Determine years to process
     if years is None:
-        # Extract years from works data
+        # Extract years from works data if available
         all_years = set()
-        for works_list in works_data_map.values():
-            for work in works_list:
-                year = work.get("publication_year")
-                if year:
-                    all_years.add(year)
+        if works_data_map:
+            for works_list in works_data_map.values():
+                for work in works_list:
+                    year = work.get("publication_year")
+                    if year:
+                        all_years.add(year)
         years = sorted(list(all_years)) if all_years else [DEFAULT_YEAR]
     
     logger.info(f"Computing metrics for years: {years}")
@@ -267,7 +275,8 @@ def build_indicators_from_resolved_entities(
     # Build institution-year indicators
     for inst in resolved_institutions:
         openalex_id = inst.get("openalex_id")
-        works_data = works_data_map.get(openalex_id, []) if works_data_map else []
+        # Safely get works data - works_data_map is guaranteed to be a dict (never None)
+        works_data = works_data_map.get(openalex_id, [])
         
         # Build indicators for each year
         for year in years:
