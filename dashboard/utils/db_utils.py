@@ -24,22 +24,39 @@ def get_db_connection():
 def check_database_available():
     """Check if database is available and has data."""
     from scripts.database import test_connection
+    from scripts.config import DB_CONFIG
+    
+    # Log current config (without password) for debugging
+    logger.info(f"Attempting connection to: {DB_CONFIG.get('user', 'N/A')}@{DB_CONFIG.get('host', 'N/A')}:{DB_CONFIG.get('port', 'N/A')}/{DB_CONFIG.get('database', 'N/A')}")
     
     # Test connection with fallback ports
     connected, conn_message = test_connection()
     if not connected:
         # Provide specific guidance based on error
-        if "connection refused" in conn_message.lower() or "could not connect" in conn_message.lower():
+        error_lower = conn_message.lower()
+        if "connection refused" in error_lower or "could not connect" in error_lower:
             return False, (
-                "⚠️ Connection refused. Enable connection pooling in Supabase:\n\n"
-                "1. Go to: https://supabase.com/dashboard\n"
-                "2. Select your project\n"
-                "3. Settings → Database → Connection Pooling\n"
-                "4. Enable 'Connection Pooling'\n"
-                "5. Use port 6543 in Streamlit secrets\n\n"
-                "Or whitelist IPs for direct connection (port 5432)."
+                f"⚠️ Connection refused.\n\n"
+                f"**Current config:**\n"
+                f"- Host: {DB_CONFIG.get('host', 'NOT SET')}\n"
+                f"- Port: {DB_CONFIG.get('port', 'NOT SET')}\n"
+                f"- User: {DB_CONFIG.get('user', 'NOT SET')}\n"
+                f"- Database: {DB_CONFIG.get('database', 'NOT SET')}\n\n"
+                f"**Fix:** Use Session Pooler connection string from Supabase:\n"
+                f"1. Supabase → Settings → Database → Connection string\n"
+                f"2. Click 'Session Pooler' tab\n"
+                f"3. Copy the connection string\n"
+                f"4. Update Streamlit secrets with those exact values"
             )
-        return False, conn_message
+        elif "authentication" in error_lower or "password" in error_lower:
+            return False, (
+                f"⚠️ Authentication failed.\n\n"
+                f"**Check:**\n"
+                f"- Password in Streamlit secrets matches Supabase\n"
+                f"- User includes project ID: `postgres.peawexmwwmkqszcdqwjv`\n"
+                f"- No extra spaces or quotes in secrets"
+            )
+        return False, f"⚠️ {conn_message}"
     
     # Query for data
     try:

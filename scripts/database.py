@@ -120,6 +120,15 @@ def test_connection() -> Tuple[bool, str]:
     Returns:
         Tuple of (success: bool, message: str)
     """
+    # Log config for debugging (without password)
+    host = DB_CONFIG.get('host', 'NOT SET')
+    port = DB_CONFIG.get('port', 'NOT SET')
+    user = DB_CONFIG.get('user', 'NOT SET')
+    database = DB_CONFIG.get('database', 'NOT SET')
+    password_set = bool(DB_CONFIG.get('password', ''))
+    
+    logger.info(f"Testing connection: {user}@{host}:{port}/{database} (password: {'SET' if password_set else 'NOT SET'})")
+    
     ports_to_try = [DB_CONFIG.get('port', 5432)]
     
     # If using 6543 (pooling), also try 5432 (direct) as fallback
@@ -134,7 +143,8 @@ def test_connection() -> Tuple[bool, str]:
         try:
             engine = create_db_engine(port_override=port)
             with engine.connect() as conn:
-                conn.execute(text("SELECT 1"))
+                result = conn.execute(text("SELECT 1"))
+                result.fetchone()  # Actually fetch to ensure connection works
             engine.dispose()
             if port == DB_CONFIG.get('port', 5432):
                 logger.info(f"Database connection successful on port {port}")
@@ -144,20 +154,36 @@ def test_connection() -> Tuple[bool, str]:
                 return True, f"Connected on port {port} (fallback)"
         except Exception as e:
             last_error = e
-            logger.debug(f"Connection failed on port {port}: {e}")
+            error_str = str(e)
+            logger.error(f"Connection failed on port {port}: {error_str}")
+            # Log more details for common errors
+            if "could not translate host name" in error_str.lower():
+                logger.error(f"DNS resolution failed for host: {host}")
+            elif "connection refused" in error_str.lower():
+                logger.error(f"Connection refused - check if host {host} and port {port} are correct")
+            elif "authentication" in error_str.lower() or "password" in error_str.lower():
+                logger.error(f"Authentication failed - check user and password")
             continue
     
     error_msg = str(last_error).lower() if last_error else "Unknown error"
-    if "connection refused" in error_msg or "could not connect" in error_msg:
+    full_error = str(last_error) if last_error else "No error details available"
+    
+    if "connection refused" in error_msg or "could not connect" in error_msg or "could not translate host" in error_msg:
         message = (
-            f"Connection refused on all ports. "
-            f"Enable connection pooling in Supabase (Settings → Database → Connection Pooling) "
-            f"or whitelist Streamlit Cloud IPs for direct connection."
+            f"Connection refused. Check:\n"
+            f"- Host: {host}\n"
+            f"- Port: {port}\n"
+            f"- Use Session Pooler connection string from Supabase"
         )
     elif "authentication" in error_msg or "password" in error_msg:
-        message = "Authentication failed. Check password in secrets."
+        message = (
+            f"Authentication failed. Check:\n"
+            f"- User: {user} (should include project ID for pooler)\n"
+            f"- Password is correct\n"
+            f"- Full error: {full_error[:150]}"
+        )
     else:
-        message = f"Connection failed: {str(last_error)[:200]}"
+        message = f"Connection failed: {full_error[:200]}"
     
     logger.error(f"Database connection failed: {message}")
     return False, message
