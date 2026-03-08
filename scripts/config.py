@@ -7,6 +7,7 @@ from dotenv import load_dotenv
 load_dotenv()
 
 import os
+import logging
 from pathlib import Path
 from typing import Dict, Any
 
@@ -185,8 +186,16 @@ class DBConfigProxy:
 DB_CONFIG: Dict[str, Any] = DBConfigProxy()
 
 # OpenAlex API configuration
+# Load from Streamlit secrets first, then environment variables
 OPENALEX_API_KEY = get_config_value("OPENALEX_API_KEY") or os.getenv("OPENALEX_API_KEY", "")
 OPENALEX_EMAIL = get_config_value("OPENALEX_EMAIL") or os.getenv("OPENALEX_EMAIL", "")
+
+# Log API key status (without exposing the key)
+_logger = logging.getLogger(__name__)
+if OPENALEX_API_KEY:
+    _logger.info("OpenAlex API key loaded successfully")
+else:
+    _logger.warning("OpenAlex API key not found. Set OPENALEX_API_KEY in .env or Streamlit secrets.")
 OPENALEX_BASE_URL = "https://api.openalex.org"
 
 # Crossref API configuration

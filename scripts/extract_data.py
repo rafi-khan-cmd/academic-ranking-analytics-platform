@@ -90,6 +90,11 @@ def make_request_with_retry(url: str, params: Dict = None, use_cache: bool = Tru
         JSON response or None if failed
     """
     params = params or {}
+    
+    # Add API key to params (OpenAlex accepts it as query parameter)
+    if OPENALEX_API_KEY:
+        params["api_key"] = OPENALEX_API_KEY
+    
     cache_key = get_cache_key(url, params)
     
     # Check cache first
@@ -142,7 +147,7 @@ def make_request_with_retry(url: str, params: Dict = None, use_cache: bool = Tru
 def fetch_institutions_by_filter(
     filters: Dict[str, Any],
     sort_by: str = "cited_by_count:desc",
-    per_page: int = 200,
+    per_page: int = 100,  # OpenAlex max per_page is 100
     max_results: int = 500,
     use_cache: bool = True
 ) -> List[Dict[str, Any]]:
@@ -152,7 +157,7 @@ def fetch_institutions_by_filter(
     Args:
         filters: Dictionary of filter parameters
         sort_by: Sort parameter
-        per_page: Results per page
+        per_page: Results per page (max 100 for OpenAlex)
         max_results: Maximum total results
         use_cache: Whether to use cached responses
     
@@ -163,6 +168,9 @@ def fetch_institutions_by_filter(
     all_results = []
     page = 1
     
+    # Ensure per_page doesn't exceed OpenAlex limit
+    per_page = min(per_page, 100)
+    
     # Build filter string
     filter_parts = []
     for key, value in filters.items():
@@ -170,7 +178,9 @@ def fetch_institutions_by_filter(
             filter_parts.append(f"{key}:{value}")
     filter_str = ",".join(filter_parts) if filter_parts else None
     
+    # Debug logging: Log exact params being used
     logger.info(f"Fetching institutions (max {max_results})...")
+    logger.debug(f"OpenAlex request params: filter={filter_str}, sort={sort_by}, per_page={per_page}, api_key={'***' if OPENALEX_API_KEY else 'NOT SET'}")
     
     while len(all_results) < max_results:
         params = {
@@ -184,10 +194,23 @@ def fetch_institutions_by_filter(
         
         data = make_request_with_retry(url, params=params, use_cache=use_cache)
         if not data:
+            logger.warning(f"No data returned from OpenAlex API for page {page}")
             break
         
         results = data.get("results", [])
+        
+        # Debug logging: Log first response details
+        if page == 1:
+            logger.info(f"First response: {len(results)} institutions returned")
+            if results:
+                sample_inst = results[0]
+                logger.debug(f"Sample institution: type={sample_inst.get('type')}, cited_by_count={sample_inst.get('cited_by_count')}, name={sample_inst.get('display_name', 'N/A')[:50]}")
+            else:
+                logger.warning(f"First response returned 0 results. Response keys: {list(data.keys())}")
+                logger.debug(f"Full response shape: {type(data)}, keys: {list(data.keys()) if isinstance(data, dict) else 'not a dict'}")
+        
         if not results:
+            logger.info(f"No more results at page {page}")
             break
         
         all_results.extend(results)
@@ -201,6 +224,8 @@ def fetch_institutions_by_filter(
         time.sleep(RATE_LIMIT_DELAY)
     
     logger.info(f"Fetched {len(all_results)} institutions total")
+    if len(all_results) == 0:
+        logger.error("WARNING: 0 institutions fetched. Check OpenAlex API key and filters.")
     return all_results
 
 
@@ -218,7 +243,7 @@ def extract_top_institutions(
         top_n: Number of top institutions to fetch
         min_cited_by_count: Minimum citation count threshold
         countries: Optional list of country codes to filter
-        institution_types: Optional list of institution types
+        institution_types: Optional list of institution types (e.g., ["education", "company"])
         use_cache: Whether to use cached responses
     
     Returns:
@@ -231,40 +256,61 @@ def extract_top_institutions(
         "cited_by_count": f">{min_cited_by_count}"
     }
     
+    # Institution type filtering - support education and other valid types
     if institution_types:
         type_filter = "|".join(institution_types)
         filters["type"] = type_filter
+        logger.info(f"Using custom institution types filter: {type_filter}")
     else:
-        filters["type"] = "university|institute|research"
+        # Default: include education (most common for universities) and other academic types
+        # Don't restrict too much - let OpenAlex return what it has
+        filters["type"] = "education|company|facility"  # education covers universities
+        logger.info("Using default institution type filter: education|company|facility")
     
     if countries:
         country_filter = "|".join(countries)
         filters["country_code"] = country_filter
+        logger.info(f"Filtering by countries: {country_filter}")
+    
+    # Debug: Log filter being used
+    logger.debug(f"OpenAlex filters: {filters}")
     
     # Fetch institutions
     institutions = fetch_institutions_by_filter(
         filters=filters,
         sort_by="cited_by_count:desc",
-        per_page=200,
+        per_page=100,  # OpenAlex max is 100
         max_results=top_n * 2,  # Fetch more to filter
         use_cache=use_cache
     )
     
-    # Filter and sort
-    filtered = [
-        inst for inst in institutions
-        if inst.get("type") in ["university", "institute", "research"]
-    ]
+    logger.info(f"Received {len(institutions)} institutions from OpenAlex API")
     
-    # Sort by cited_by_count
+    # Don't post-filter by type - accept all types returned by OpenAlex
+    # The API filter already handled type selection
+    filtered = institutions
+    
+    # Sort by cited_by_count - use top-level field, not summary_stats
+    # OpenAlex institutions have cited_by_count at top level
     filtered.sort(
-        key=lambda x: x.get("summary_stats", {}).get("cited_by_count", 0),
+        key=lambda x: x.get("cited_by_count", 0) or x.get("summary_stats", {}).get("cited_by_count", 0),
         reverse=True
     )
     
     top_institutions = filtered[:top_n]
     
+    # Debug: Log what types we got
+    if top_institutions:
+        type_counts = {}
+        for inst in top_institutions:
+            inst_type = inst.get("type", "unknown")
+            type_counts[inst_type] = type_counts.get(inst_type, 0) + 1
+        logger.info(f"Institution types in top {len(top_institutions)}: {type_counts}")
+    
     logger.info(f"Selected top {len(top_institutions)} institutions")
+    
+    if len(top_institutions) == 0:
+        logger.error("ERROR: 0 institutions selected. Check OpenAlex API response and filters.")
     
     # Save raw data
     save_raw_data(top_institutions, "institutions_raw.json")
@@ -276,7 +322,7 @@ def fetch_institution_works(
     institution_id: str,
     year: Optional[int] = None,
     years_back: int = DEFAULT_YEARS_BACK,
-    per_page: int = 200,
+    per_page: int = 100,  # OpenAlex max per_page is 100
     limit: Optional[int] = None,
     use_cache: bool = True
 ) -> List[Dict[str, Any]]:
@@ -297,6 +343,9 @@ def fetch_institution_works(
     url = f"{OPENALEX_BASE_URL}/works"
     all_works = []
     page = 1
+    
+    # Ensure per_page doesn't exceed OpenAlex limit
+    per_page = min(per_page, 100)
     
     # Build year filter
     if year:
@@ -439,7 +488,7 @@ def fetch_institution_works_batch(
 
 
 def fetch_topics(
-    per_page: int = 200,
+    per_page: int = 100,  # OpenAlex max per_page is 100
     max_results: int = 1000,
     sort_by: str = "works_count:desc",
     use_cache: bool = True
@@ -459,6 +508,9 @@ def fetch_topics(
     url = f"{OPENALEX_BASE_URL}/topics"
     all_topics = []
     page = 1
+    
+    # Ensure per_page doesn't exceed OpenAlex limit
+    per_page = min(per_page, 100)
     
     logger.info(f"Fetching topics (max {max_results})...")
     
