@@ -1,6 +1,11 @@
 """
 Create sample/demo data for testing the platform without API access.
 This generates realistic synthetic data for demonstration purposes.
+
+⚠️ NOTE: This is OPTIONAL demo data only. The production pipeline uses
+real data from OpenAlex API by default (200+ institutions).
+
+To use real data, run: python scripts/run_pipeline.py
 """
 
 import json

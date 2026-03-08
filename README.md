@@ -83,6 +83,13 @@ Public Deployment
 
 ## 📊 Data Sources
 
+> **⚠️ IMPORTANT: Production Pipeline is Default**
+> 
+> This platform uses **real-time OpenAlex API** as the primary data source by default.
+> - **Default:** 200 institutions from OpenAlex API (configurable)
+> - **Sample data:** Optional demo data only (40 institutions) - NOT the default path
+> - **To use real data:** Run `python scripts/run_pipeline.py` (no sample data needed)
+
 ### Primary Data Source: OpenAlex API (Real-Time)
 
 The platform uses **real-time API calls** to the [OpenAlex API](https://openalex.org/) as the primary data source. OpenAlex provides comprehensive academic data including institutions, works (publications), topics, authors, and sources.
@@ -348,9 +355,12 @@ psql -h your-host -U your-user -d postgres -f sql/schema.sql
 psql -h your-host -U your-user -d postgres -f sql/views.sql
 ```
 
-6. **Run the production data pipeline:**
+6. **Run the production data pipeline (REQUIRED for real data):**
 ```bash
-# Basic run (200 institutions, last 5 years)
+# ⚠️ IMPORTANT: Sample data is NOT the default path
+# The production pipeline fetches real data from OpenAlex API
+
+# Basic run (200 institutions from OpenAlex API, last 5 years)
 python scripts/run_pipeline.py
 
 # Custom configuration
@@ -463,6 +473,12 @@ python scripts/advanced_analytics.py
 ```
 
 **Note:** The pipeline fetches real-time data from OpenAlex and ROR APIs. Ensure you have internet connectivity and optionally set `OPENALEX_EMAIL` in `.env` for better rate limits.
+
+**⚠️ Sample Data is Optional Only:**
+- The `create_sample_data.py` script exists for demo/testing purposes only
+- It creates 40 synthetic institutions for quick testing
+- **The production pipeline uses real OpenAlex API data by default (200+ institutions)**
+- Sample data is NOT the default path - use `python scripts/run_pipeline.py` for real data
 
 ### Running the Dashboard
 
