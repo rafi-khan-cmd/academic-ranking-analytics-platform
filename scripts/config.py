@@ -32,25 +32,37 @@ def strip_quotes(value: str) -> str:
 
 # Database configuration
 # Streamlit Cloud loads secrets into st.secrets, not environment variables
-# We need to check for st.secrets first, then fall back to environment variables
+# We need to access st.secrets lazily (when called, not at import time)
 def get_db_config() -> Dict[str, Any]:
-    """Get database configuration from Streamlit secrets or environment variables."""
+    """Get database configuration from Streamlit secrets or environment variables.
+    
+    This function is called lazily to ensure Streamlit is initialized.
+    """
     # Try Streamlit secrets first (for Streamlit Cloud)
+    # Streamlit secrets can be accessed as attributes: st.secrets.POSTGRES_HOST
     try:
         import streamlit as st
         if hasattr(st, 'secrets'):
+            secrets = st.secrets
+            # Try attribute access (Streamlit secrets are accessed as attributes)
             try:
-                # Access secrets - they're available as attributes or dict-like
-                secrets = st.secrets
-                return {
-                    "host": str(secrets.get("POSTGRES_HOST", secrets.get("postgres_host", ""))).strip('"'),
-                    "port": int(str(secrets.get("POSTGRES_PORT", secrets.get("postgres_port", "5432"))).strip('"\'')),
-                    "database": str(secrets.get("POSTGRES_DB", secrets.get("postgres_db", ""))).strip('"'),
-                    "user": str(secrets.get("POSTGRES_USER", secrets.get("postgres_user", ""))).strip('"'),
-                    "password": str(secrets.get("POSTGRES_PASSWORD", secrets.get("postgres_password", ""))).strip('"'),
-                }
-            except (AttributeError, KeyError, TypeError):
-                # Secrets not available or wrong format, fall through to env vars
+                host = getattr(secrets, "POSTGRES_HOST", None) or ""
+                port = getattr(secrets, "POSTGRES_PORT", None) or "5432"
+                database = getattr(secrets, "POSTGRES_DB", None) or ""
+                user = getattr(secrets, "POSTGRES_USER", None) or ""
+                password = getattr(secrets, "POSTGRES_PASSWORD", None) or ""
+                
+                # If we got any non-empty values from secrets, use them
+                if host or database or user or password:
+                    return {
+                        "host": str(host).strip('"') if host else "",
+                        "port": int(str(port).strip('"\'')) if port else 5432,
+                        "database": str(database).strip('"') if database else "",
+                        "user": str(user).strip('"') if user else "",
+                        "password": str(password).strip('"') if password else "",
+                    }
+            except (AttributeError, TypeError, RuntimeError):
+                # Secrets not available or Streamlit not initialized yet
                 pass
     except (ImportError, RuntimeError):
         # Not in Streamlit environment or Streamlit not initialized
@@ -65,7 +77,27 @@ def get_db_config() -> Dict[str, Any]:
         "password": strip_quotes(os.getenv("POSTGRES_PASSWORD", "")),
     }
 
-DB_CONFIG: Dict[str, Any] = get_db_config()
+# Lazy loading: DB_CONFIG is a property that calls get_db_config() when accessed
+class DBConfigProxy:
+    """Proxy object that lazily loads DB config from Streamlit secrets or env vars."""
+    _config: Dict[str, Any] = None
+    
+    def __getitem__(self, key: str) -> Any:
+        if self._config is None:
+            self._config = get_db_config()
+        return self._config[key]
+    
+    def get(self, key: str, default: Any = None) -> Any:
+        if self._config is None:
+            self._config = get_db_config()
+        return self._config.get(key, default)
+    
+    def __contains__(self, key: str) -> bool:
+        if self._config is None:
+            self._config = get_db_config()
+        return key in self._config
+
+DB_CONFIG: Dict[str, Any] = DBConfigProxy()
 
 # OpenAlex API configuration
 OPENALEX_EMAIL = os.getenv("OPENALEX_EMAIL", "")
