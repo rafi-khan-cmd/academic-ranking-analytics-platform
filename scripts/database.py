@@ -30,26 +30,42 @@ def create_db_engine(port_override=None):
     """
     # Use override port if provided, otherwise use config
     port = port_override if port_override is not None else DB_CONFIG.get('port', 5432)
+    host = DB_CONFIG.get('host', '')
     
     # Build connection string with specified port
+    # URL encode password to handle special characters
+    from urllib.parse import quote_plus
+    password = DB_CONFIG.get('password', '')
+    if not password:
+        logger.warning("Database password is empty! Check environment variables.")
+    password_encoded = quote_plus(password)
+    user = DB_CONFIG.get('user', 'postgres')
+    database = DB_CONFIG.get('database', 'postgres')
+    
     connection_string = (
-        f"postgresql://{DB_CONFIG['user']}:{DB_CONFIG['password']}"
-        f"@{DB_CONFIG['host']}:{port}/{DB_CONFIG['database']}"
+        f"postgresql://{user}:{password_encoded}"
+        f"@{host}:{port}/{database}"
     )
     
-    # Add pgbouncer parameter for Session Pooler
-    # Session Pooler uses pooler.supabase.com hostname or port 6543
-    # This is required for IPv4 compatibility with Supabase poolers
-    host = DB_CONFIG.get('host', '')
-    if 'pooler.supabase.com' in host or port == 6543:
+    # Log connection details (without password) for debugging
+    logger.debug(f"Connecting to: {user}@{host}:{port}/{database}")
+    
+    # For Session Pooler (pooler.supabase.com), pgbouncer is handled automatically
+    # For Transaction Pooler (port 6543), add pgbouncer parameter
+    # Note: Session Pooler on port 5432 doesn't need explicit pgbouncer=true
+    if port == 6543 and 'pooler.supabase.com' not in host:
         connection_string += "?pgbouncer=true"
+        logger.debug("Added pgbouncer=true parameter")
     
     # Supabase connection settings
-    # 'prefer' works for both pooling and direct connections
+    # Use 'require' for pooler connections to ensure SSL
+    ssl_mode = "require" if 'pooler.supabase.com' in host else "prefer"
     connect_args = {
         "connect_timeout": 15,
-        "sslmode": "prefer"
+        "sslmode": ssl_mode
     }
+    
+    logger.debug(f"SSL mode: {ssl_mode}")
     
     engine = create_engine(
         connection_string,

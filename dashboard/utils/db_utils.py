@@ -86,13 +86,16 @@ def fetch_top_rankings(methodology: str = "Balanced Model", limit: int = 20,
         """)
         
         engine = create_db_engine()
-        with engine.connect() as conn:
-            df = pd.read_sql(
-                query, 
-                conn, 
-                params={"method": methodology, "year": year, "country": country, "limit": limit}
-            )
-        return df
+        try:
+            with engine.connect() as conn:
+                df = pd.read_sql(
+                    query, 
+                    conn, 
+                    params={"method": methodology, "year": year, "country": country, "limit": limit}
+                )
+            return df
+        finally:
+            engine.dispose()
     except Exception as e:
         logger.error(f"Error fetching rankings: {e}")
         return pd.DataFrame()  # Return empty DataFrame on error
