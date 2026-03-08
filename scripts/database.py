@@ -114,12 +114,8 @@ def create_db_engine(port_override=None):
             "and POSTGRES_PASSWORD in Streamlit secrets or environment variables."
         )
     
-    # Startup debug log (only safe values, never password)
-    logger.info("Database connection configuration:")
-    logger.info(f"  Host: {host}")
-    logger.info(f"  Port: {port}")
-    logger.info(f"  User: {user}")
-    logger.info(f"  Database: {database}")
+    # Safe debug logging (never print password)
+    print(f"[DB] host={host} port={port} user={user}")
     
     # Detect connection mode and validate host/user match
     try:
@@ -151,10 +147,8 @@ def create_db_engine(port_override=None):
     
     engine = create_engine(
         connection_string,
-        poolclass=NullPool,
-        echo=False,
-        connect_args=connect_args,
-        pool_pre_ping=True  # Verify connections before using
+        pool_pre_ping=True,
+        connect_args={"sslmode": "require"}
     )
     return engine
 

@@ -3,13 +3,36 @@ Configuration module for Academic Rankings Analytics Platform.
 Handles environment variables, database connections, and project settings.
 """
 
+from dotenv import load_dotenv
+load_dotenv()
+
 import os
 from pathlib import Path
-from dotenv import load_dotenv
 from typing import Dict, Any
 
-# Load environment variables from .env file (for local development)
-load_dotenv()
+# Try to import streamlit (only available in Streamlit environment)
+try:
+    import streamlit as st
+except ImportError:
+    st = None
+
+
+def get_config_value(key: str):
+    """Get configuration value from Streamlit secrets first, then environment variables.
+    
+    Args:
+        key: Configuration key name (e.g., "POSTGRES_HOST")
+    
+    Returns:
+        Configuration value from st.secrets or os.getenv, or None if not found
+    """
+    if st is not None:
+        try:
+            if key in st.secrets:
+                return st.secrets[key]
+        except Exception:
+            pass
+    return os.getenv(key)
 
 # Streamlit Cloud loads secrets into os.environ automatically
 # No need for dotenv in Streamlit Cloud, but it's safe to call it
@@ -70,71 +93,50 @@ def _validate_connection_mode(host: str, user: str):
 def get_db_config() -> Dict[str, Any]:
     """Get database configuration from Streamlit secrets or environment variables.
     
-    This function is called lazily to ensure Streamlit is initialized.
-    Raises ValueError if any required credential is missing or if connection mode is mixed.
+    Uses get_config_value() to check st.secrets first, then os.getenv.
+    Raises RuntimeError if any required credential is missing or if host is localhost.
     """
-    config = {}
+    # Load credentials using get_config_value (checks st.secrets first, then os.getenv)
+    host = get_config_value("POSTGRES_HOST")
+    port = get_config_value("POSTGRES_PORT")
+    database = get_config_value("POSTGRES_DB")
+    user = get_config_value("POSTGRES_USER")
+    password = get_config_value("POSTGRES_PASSWORD")
     
-    # Try Streamlit secrets first (for Streamlit Cloud)
-    # Streamlit secrets can be accessed as attributes: st.secrets.POSTGRES_HOST
-    try:
-        import streamlit as st
-        if hasattr(st, 'secrets'):
-            secrets = st.secrets
-            # Try attribute access (Streamlit secrets are accessed as attributes)
-            try:
-                # Get all required values - only use secrets if ALL are present
-                host = getattr(secrets, "POSTGRES_HOST", None)
-                port = getattr(secrets, "POSTGRES_PORT", None)
-                database = getattr(secrets, "POSTGRES_DB", None)
-                user = getattr(secrets, "POSTGRES_USER", None)
-                password = getattr(secrets, "POSTGRES_PASSWORD", None)
-                
-                # Only use secrets if ALL required values are present
-                if all([host, port, database, user, password]):
-                    config = {
-                        "host": strip_quotes(str(host)),
-                        "port": int(strip_quotes(str(port)).strip('\'')),
-                        "database": strip_quotes(str(database)),
-                        "user": strip_quotes(str(user)),
-                        "password": strip_quotes(str(password)),
-                    }
-                    # Validate connection mode consistency
-                    _validate_connection_mode(config["host"], config["user"])
-                    return config
-            except (AttributeError, TypeError, RuntimeError):
-                # Secrets not available or Streamlit not initialized yet
-                pass
-    except (ImportError, RuntimeError):
-        # Not in Streamlit environment or Streamlit not initialized
-        pass
+    # Strip quotes from string values (Streamlit Cloud may add them)
+    if host:
+        host = strip_quotes(str(host))
+    if database:
+        database = strip_quotes(str(database))
+    if user:
+        user = strip_quotes(str(user))
+    if password:
+        password = strip_quotes(str(password))
     
-    # Fallback to environment variables (for local development or scripts)
-    # Only use the 5 required keys: POSTGRES_HOST, POSTGRES_PORT, POSTGRES_DB, POSTGRES_USER, POSTGRES_PASSWORD
-    config = {
-        "host": strip_quotes(os.getenv("POSTGRES_HOST", "")),
-        "port": os.getenv("POSTGRES_PORT", ""),
-        "database": strip_quotes(os.getenv("POSTGRES_DB", "")),
-        "user": strip_quotes(os.getenv("POSTGRES_USER", "")),
-        "password": strip_quotes(os.getenv("POSTGRES_PASSWORD", "")),
-    }
+    # Immediately validate credentials
+    if not host or not port or not database or not user or not password:
+        raise RuntimeError(
+            "Database credentials missing. Ensure POSTGRES_* variables exist in .env or Streamlit secrets."
+        )
     
-    # Validate required credentials - raise ValueError if any are missing
-    required_keys = ["host", "port", "database", "user", "password"]
-    missing_keys = [key for key in required_keys if not config.get(key)]
-    
-    if missing_keys:
-        missing_vars = ", ".join(f"POSTGRES_{key.upper()}" for key in missing_keys)
-        raise ValueError(
-            f"Missing required database credentials: {', '.join(missing_keys)}. "
-            f"Please set {missing_vars} in Streamlit secrets or environment variables."
+    if host == "localhost":
+        raise RuntimeError(
+            "Database host incorrectly set to localhost. Supabase credentials were not loaded."
         )
     
     # Convert port to int
     try:
-        config["port"] = int(str(config["port"]).strip('"\''))
+        port = int(str(port).strip('"\''))
     except (ValueError, AttributeError):
-        raise ValueError(f"Invalid POSTGRES_PORT value: {config['port']}. Must be a valid integer.")
+        raise RuntimeError(f"Invalid POSTGRES_PORT value: {port}. Must be a valid integer.")
+    
+    config = {
+        "host": host,
+        "port": port,
+        "database": database,
+        "user": user,
+        "password": password,
+    }
     
     # Validate connection mode consistency
     _validate_connection_mode(config["host"], config["user"])
