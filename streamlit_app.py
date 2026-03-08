@@ -1,13 +1,7 @@
 """
-Streamlit app entry point for deployment.
-Redirects to main dashboard application.
+Streamlit app entry point wrapper for deployment.
+Redirects to main dashboard application at dashboard/app.py.
 """
 
-import sys
-from pathlib import Path
-
-# Add project root to path
-sys.path.insert(0, str(Path(__file__).parent))
-
-# Import and run main app
+# Import and run main app - dashboard/app.py is the single entrypoint
 from dashboard.app import *
