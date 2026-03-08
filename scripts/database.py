@@ -27,28 +27,38 @@ def create_db_engine(port_override=None):
     
     Args:
         port_override: Optional port to use instead of DB_CONFIG['port']
-    """
-    # Use override port if provided, otherwise use config
-    port = port_override if port_override is not None else DB_CONFIG.get('port', 5432)
-    host = DB_CONFIG.get('host', '')
     
-    # Build connection string with specified port
+    Raises:
+        RuntimeError: If host is localhost (production safeguard)
+        ValueError: If required credentials are missing
+    """
+    # Get required credentials - will raise ValueError if missing
+    host = DB_CONFIG['host']
+    port = port_override if port_override is not None else DB_CONFIG['port']
+    database = DB_CONFIG['database']
+    user = DB_CONFIG['user']
+    password = DB_CONFIG['password']
+    
+    # Production safeguard: raise RuntimeError if host is localhost
+    if host == "localhost":
+        raise RuntimeError(
+            "Database host is 'localhost'. Supabase credentials were not loaded. "
+            "Please set POSTGRES_HOST, POSTGRES_PORT, POSTGRES_DB, POSTGRES_USER, "
+            "and POSTGRES_PASSWORD in Streamlit secrets or environment variables."
+        )
+    
     # URL encode password to handle special characters
     from urllib.parse import quote_plus
-    password = DB_CONFIG.get('password', '')
-    if not password:
-        logger.warning("Database password is empty! Check environment variables.")
     password_encoded = quote_plus(password)
-    user = DB_CONFIG.get('user', 'postgres')
-    database = DB_CONFIG.get('database', 'postgres')
     
+    # Build connection string from the five POSTGRES_* values
     connection_string = (
         f"postgresql://{user}:{password_encoded}"
         f"@{host}:{port}/{database}"
     )
     
-    # Log connection details (without password) for debugging
-    logger.debug(f"Connecting to: {user}@{host}:{port}/{database}")
+    # Safe debug log: only log host, never password
+    logger.info(f"Connecting to database at host: {host}")
     
     # For Session Pooler (pooler.supabase.com), pgbouncer is handled automatically
     # For Transaction Pooler (port 6543), add pgbouncer parameter
@@ -57,15 +67,11 @@ def create_db_engine(port_override=None):
         connection_string += "?pgbouncer=true"
         logger.debug("Added pgbouncer=true parameter")
     
-    # Supabase connection settings
-    # Use 'require' for pooler connections to ensure SSL
-    ssl_mode = "require" if 'pooler.supabase.com' in host else "prefer"
+    # Supabase connection settings - always use SSL require
     connect_args = {
         "connect_timeout": 15,
-        "sslmode": ssl_mode
+        "sslmode": "require"
     }
-    
-    logger.debug(f"SSL mode: {ssl_mode}")
     
     engine = create_engine(
         connection_string,

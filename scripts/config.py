@@ -37,7 +37,10 @@ def get_db_config() -> Dict[str, Any]:
     """Get database configuration from Streamlit secrets or environment variables.
     
     This function is called lazily to ensure Streamlit is initialized.
+    Raises ValueError if any required credential is missing.
     """
+    config = {}
+    
     # Try Streamlit secrets first (for Streamlit Cloud)
     # Streamlit secrets can be accessed as attributes: st.secrets.POSTGRES_HOST
     try:
@@ -46,21 +49,21 @@ def get_db_config() -> Dict[str, Any]:
             secrets = st.secrets
             # Try attribute access (Streamlit secrets are accessed as attributes)
             try:
-                host = getattr(secrets, "POSTGRES_HOST", None) or ""
-                port = getattr(secrets, "POSTGRES_PORT", None) or "5432"
-                database = getattr(secrets, "POSTGRES_DB", None) or ""
-                user = getattr(secrets, "POSTGRES_USER", None) or ""
-                password = getattr(secrets, "POSTGRES_PASSWORD", None) or ""
+                config["host"] = getattr(secrets, "POSTGRES_HOST", None)
+                config["port"] = getattr(secrets, "POSTGRES_PORT", None)
+                config["database"] = getattr(secrets, "POSTGRES_DB", None)
+                config["user"] = getattr(secrets, "POSTGRES_USER", None)
+                config["password"] = getattr(secrets, "POSTGRES_PASSWORD", None)
                 
                 # If we got any non-empty values from secrets, use them
                 # Strip quotes from all values (Streamlit Cloud may store them with quotes)
-                if host or database or user or password:
+                if any(config.values()):
                     return {
-                        "host": strip_quotes(str(host)) if host else "",
-                        "port": int(strip_quotes(str(port)).strip('\'')) if port else 5432,
-                        "database": strip_quotes(str(database)) if database else "",
-                        "user": strip_quotes(str(user)) if user else "",
-                        "password": strip_quotes(str(password)) if password else "",
+                        "host": strip_quotes(str(config["host"])) if config["host"] else "",
+                        "port": int(strip_quotes(str(config["port"])).strip('\'')) if config["port"] else None,
+                        "database": strip_quotes(str(config["database"])) if config["database"] else "",
+                        "user": strip_quotes(str(config["user"])) if config["user"] else "",
+                        "password": strip_quotes(str(config["password"])) if config["password"] else "",
                     }
             except (AttributeError, TypeError, RuntimeError):
                 # Secrets not available or Streamlit not initialized yet
@@ -70,13 +73,32 @@ def get_db_config() -> Dict[str, Any]:
         pass
     
     # Fallback to environment variables (for local development or scripts)
-    return {
-        "host": strip_quotes(os.getenv("POSTGRES_HOST", "localhost")),
-        "port": int(os.getenv("POSTGRES_PORT", "5432").strip('"\'')),
-        "database": strip_quotes(os.getenv("POSTGRES_DB", "academic_rankings")),
-        "user": strip_quotes(os.getenv("POSTGRES_USER", "postgres")),
+    config = {
+        "host": strip_quotes(os.getenv("POSTGRES_HOST", "")),
+        "port": os.getenv("POSTGRES_PORT", ""),
+        "database": strip_quotes(os.getenv("POSTGRES_DB", "")),
+        "user": strip_quotes(os.getenv("POSTGRES_USER", "")),
         "password": strip_quotes(os.getenv("POSTGRES_PASSWORD", "")),
     }
+    
+    # Validate required credentials - raise ValueError if any are missing
+    required_keys = ["host", "port", "database", "user", "password"]
+    missing_keys = [key for key in required_keys if not config.get(key)]
+    
+    if missing_keys:
+        missing_vars = ", ".join(f"POSTGRES_{key.upper()}" for key in missing_keys)
+        raise ValueError(
+            f"Missing required database credentials: {', '.join(missing_keys)}. "
+            f"Please set {missing_vars} in Streamlit secrets or environment variables."
+        )
+    
+    # Convert port to int
+    try:
+        config["port"] = int(str(config["port"]).strip('"\''))
+    except (ValueError, AttributeError):
+        raise ValueError(f"Invalid POSTGRES_PORT value: {config['port']}. Must be a valid integer.")
+    
+    return config
 
 # Lazy loading: DB_CONFIG is a property that calls get_db_config() when accessed
 class DBConfigProxy:
@@ -86,16 +108,37 @@ class DBConfigProxy:
     def __getitem__(self, key: str) -> Any:
         if self._config is None:
             self._config = get_db_config()
+            # Production safeguard: raise RuntimeError if host is localhost
+            if self._config.get("host") == "localhost":
+                raise RuntimeError(
+                    "Database host is 'localhost'. Supabase credentials were not loaded. "
+                    "Please set POSTGRES_HOST, POSTGRES_PORT, POSTGRES_DB, POSTGRES_USER, "
+                    "and POSTGRES_PASSWORD in Streamlit secrets or environment variables."
+                )
         return self._config[key]
     
     def get(self, key: str, default: Any = None) -> Any:
         if self._config is None:
             self._config = get_db_config()
+            # Production safeguard: raise RuntimeError if host is localhost
+            if self._config.get("host") == "localhost":
+                raise RuntimeError(
+                    "Database host is 'localhost'. Supabase credentials were not loaded. "
+                    "Please set POSTGRES_HOST, POSTGRES_PORT, POSTGRES_DB, POSTGRES_USER, "
+                    "and POSTGRES_PASSWORD in Streamlit secrets or environment variables."
+                )
         return self._config.get(key, default)
     
     def __contains__(self, key: str) -> bool:
         if self._config is None:
             self._config = get_db_config()
+            # Production safeguard: raise RuntimeError if host is localhost
+            if self._config.get("host") == "localhost":
+                raise RuntimeError(
+                    "Database host is 'localhost'. Supabase credentials were not loaded. "
+                    "Please set POSTGRES_HOST, POSTGRES_PORT, POSTGRES_DB, POSTGRES_USER, "
+                    "and POSTGRES_PASSWORD in Streamlit secrets or environment variables."
+                )
         return key in self._config
 
 DB_CONFIG: Dict[str, Any] = DBConfigProxy()
