@@ -37,6 +37,11 @@ def create_db_engine(port_override=None):
         f"@{DB_CONFIG['host']}:{port}/{DB_CONFIG['database']}"
     )
     
+    # Add pgbouncer parameter for Session Pooler (port 6543)
+    # This is required for IPv4 compatibility with Supabase poolers
+    if port == 6543:
+        connection_string += "?pgbouncer=true"
+    
     # Supabase connection settings
     # 'prefer' works for both pooling and direct connections
     connect_args = {
