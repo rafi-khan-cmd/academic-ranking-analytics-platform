@@ -13,7 +13,7 @@ sys.path.insert(0, str(Path(__file__).parent))
 import streamlit as st
 
 # Deployment marker
-print("[DEPLOY MARKER] streamlit_app.py booted - v2")
+print("[DEPLOY MARKER] streamlit_app.py booted - v3")
 
 # Validate database configuration immediately
 try:
