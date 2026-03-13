@@ -6,7 +6,7 @@ Computes ranking-style indicators from raw data.
 import json
 import logging
 from pathlib import Path
-from typing import Dict, List, Optional, Tuple
+from typing import Dict, List, Optional, Tuple, Any
 import pandas as pd
 import numpy as np
 
@@ -220,6 +220,7 @@ def build_institution_indicators(
 def build_indicators_from_resolved_entities(
     resolved_institutions: List[Dict],
     works_data_map: Optional[Dict[str, List[Dict]]] = None,
+    aggregated_metrics_map: Optional[Dict[str, Dict[str, Any]]] = None,
     years: Optional[List[int]] = None,
     subjects: Optional[List[Dict]] = None
 ) -> List[Dict]:
@@ -229,7 +230,8 @@ def build_indicators_from_resolved_entities(
     
     Args:
         resolved_institutions: List of resolved institution records
-        works_data_map: Optional dictionary mapping OpenAlex institution IDs to works lists
+        works_data_map: Optional dictionary mapping OpenAlex institution IDs to works lists (legacy)
+        aggregated_metrics_map: Optional dictionary mapping OpenAlex institution IDs to aggregated metrics (preferred)
         years: Optional list of years to compute metrics for (None = all years)
         subjects: Optional list of subject dictionaries for subject-level metrics
     
@@ -238,68 +240,176 @@ def build_indicators_from_resolved_entities(
     """
     logger.info(f"Building indicators for {len(resolved_institutions)} institutions...")
     
+    # Log aggregated metrics availability if using them
+    if aggregated_metrics_map:
+        sample_inst_id = next(iter(aggregated_metrics_map.keys())) if aggregated_metrics_map else None
+        if sample_inst_id:
+            sample_metrics = aggregated_metrics_map.get(sample_inst_id, {})
+            sample_years = sorted(sample_metrics.get("year_counts", {}).keys())
+            logger.info(f"Streaming aggregated years available for sample institution {sample_inst_id}: {sample_years}")
+    
     all_indicators = []
     
-    # Handle None works_data_map - treat as empty dict
-    if works_data_map is None:
-        logger.warning("No works data provided; using fallback indicator path")
-        logger.info("Indicators will use institution summary stats from OpenAlex (if available)")
-        works_data_map = {}
-        
-        # Try to load from file as fallback
-        from scripts.extract_data import load_raw_data
-        works_data_list = load_raw_data("institution_works_raw.json")
-        if works_data_list:
-            works_data_map = {
-                item.get("institution_id"): item.get("works", [])
-                for item in works_data_list
-            }
-            logger.info(f"Loaded works data from file for {len(works_data_map)} institutions")
-        else:
-            logger.info("No works data file found. Building indicators from institution summary stats only.")
+    # Prefer aggregated metrics over full works lists (memory-efficient)
+    use_aggregated = aggregated_metrics_map is not None and len(aggregated_metrics_map) > 0
+    
+    if use_aggregated:
+        logger.info(f"Using aggregated metrics for {len(aggregated_metrics_map)} institutions (memory-efficient mode)")
+    else:
+        # Handle None works_data_map - treat as empty dict
+        if works_data_map is None:
+            logger.warning("No works data provided; using fallback indicator path")
+            logger.info("Indicators will use institution summary stats from OpenAlex (if available)")
+            works_data_map = {}
+            
+            # Try to load from file as fallback
+            from scripts.extract_data import load_raw_data
+            works_data_list = load_raw_data("institution_works_raw.json")
+            if works_data_list:
+                works_data_map = {
+                    item.get("institution_id"): item.get("works", [])
+                    for item in works_data_list
+                }
+                logger.info(f"Loaded works data from file for {len(works_data_map)} institutions")
+            else:
+                logger.info("No works data file found. Building indicators from institution summary stats only.")
     
     # Determine years to process
     if years is None:
-        # Extract years from works data if available
-        all_years = set()
-        if works_data_map:
-            for works_list in works_data_map.values():
-                for work in works_list:
-                    year = work.get("publication_year")
-                    if year:
-                        all_years.add(year)
-        years = sorted(list(all_years)) if all_years else [DEFAULT_YEAR]
+        if use_aggregated:
+            # Extract years from aggregated metrics
+            # Note: year_counts keys should be integers (fixed in works_aggregator)
+            all_years = set()
+            for metrics in aggregated_metrics_map.values():
+                year_counts = metrics.get("year_counts", {})
+                # Ensure all keys are integers (handle both int and str keys for robustness)
+                for year_key in year_counts.keys():
+                    try:
+                        all_years.add(int(year_key))
+                    except (ValueError, TypeError):
+                        logger.warning(f"Invalid year key in aggregated metrics: {year_key}, skipping")
+            years = sorted(list(all_years)) if all_years else [DEFAULT_YEAR]
+        else:
+            # Extract years from works data if available
+            all_years = set()
+            if works_data_map:
+                for works_list in works_data_map.values():
+                    for work in works_list:
+                        year = work.get("publication_year")
+                        if year:
+                            all_years.add(int(year) if isinstance(year, (int, str)) else year)
+            years = sorted(list(all_years)) if all_years else [DEFAULT_YEAR]
+    else:
+        # Ensure years are integers
+        years = [int(y) if isinstance(y, str) else y for y in years]
     
-    logger.info(f"Computing metrics for years: {years}")
+    logger.info(f"Computing metrics for years: {years} (total: {len(years)} years)")
+    logger.info(f"Building indicators for {len(resolved_institutions)} institutions × {len(years)} years = {len(resolved_institutions) * len(years)} expected indicator records")
     
     # Build institution-year indicators
     for inst in resolved_institutions:
         openalex_id = inst.get("openalex_id")
-        # Safely get works data - works_data_map is guaranteed to be a dict (never None)
-        works_data = works_data_map.get(openalex_id, [])
         
-        # Build indicators for each year
-        for year in years:
-            indicators = build_institution_indicators(
-                inst,
-                works_data=works_data,
-                year=year,
-                subject_id=None
-            )
-            all_indicators.append(indicators)
+        if use_aggregated:
+            # Use aggregated metrics (memory-efficient path)
+            metrics = aggregated_metrics_map.get(openalex_id)
+            if not metrics:
+                logger.warning(f"No aggregated metrics found for {openalex_id}, skipping")
+                continue
+            
+            # Build indicators from aggregated metrics for each year
+            for year in years:
+                # Ensure year is an integer for consistent key lookup
+                year_int = int(year) if isinstance(year, str) else year
+                
+                # Get year-specific counts from aggregated metrics
+                year_counts = metrics.get("year_counts", {})
+                year_citation_sums = metrics.get("year_citation_sums", {})
+                
+                # Create year-filtered metrics (year_counts keys should be integers)
+                year_publication_count = year_counts.get(year_int, 0)
+                year_citation_count = year_citation_sums.get(year_int, 0)
+                
+                # If no data for this specific year, use 0 (don't fall back to overall metrics)
+                # This ensures each year gets its own indicator row, even if empty
+                
+                # Build indicator from aggregated metrics
+                citations_per_paper = (
+                    year_citation_count / year_publication_count 
+                    if year_publication_count > 0 else 0.0
+                )
+                
+                # Use pre-computed quality proxy and h-index from aggregated metrics
+                quality_proxy = metrics.get("quality_proxy", 0.0)
+                h_index = metrics.get("h_index", 0)
+                top_percentile = metrics.get("top_percentile_citations", 0.0)
+                
+                # Productivity proxy (citations per paper - same as citations_per_paper)
+                productivity_proxy = citations_per_paper
+                
+                indicators = {
+                    "institution_id": inst.get("institution_id"),
+                    "canonical_name": inst.get("canonical_name"),
+                    "year": year_int,  # Use integer year consistently
+                    "subject_id": None,
+                    "publication_count": year_publication_count,
+                    "citation_count": year_citation_count,
+                    "citations_per_paper": citations_per_paper,
+                    "multi_institution_rate": metrics.get("multi_institution_rate", 0.0),
+                    "international_collaboration_rate": metrics.get("international_collaboration_rate", 0.0),
+                    "quality_proxy": quality_proxy,
+                    "productivity_proxy": productivity_proxy,
+                    "h_index": h_index,
+                    "top_percentile_citations": top_percentile,
+                    "subject_strength_basis": 0.0
+                }
+                all_indicators.append(indicators)
+        else:
+            # Legacy path: use full works lists
+            works_data = works_data_map.get(openalex_id, [])
+            
+            # Build indicators for each year
+            for year in years:
+                indicators = build_institution_indicators(
+                    inst,
+                    works_data=works_data,
+                    year=year,
+                    subject_id=None
+                )
+                all_indicators.append(indicators)
         
         # Build subject-level indicators if subjects provided
         if subjects:
+            # Subject-level aggregation would need topic mapping
+            # For now, use overall metrics (placeholder)
             for subject in subjects:
-                # Filter works by subject (would need topic mapping)
-                # For now, create placeholder subject indicators
                 for year in years:
-                    indicators = build_institution_indicators(
-                        inst,
-                        works_data=works_data,  # Would filter by subject here
-                        year=year,
-                        subject_id=subject.get("subject_id")
-                    )
+                    if use_aggregated:
+                        metrics = aggregated_metrics_map.get(openalex_id, {})
+                        # Use overall metrics as approximation
+                        indicators = {
+                            "institution_id": inst.get("institution_id"),
+                            "canonical_name": inst.get("canonical_name"),
+                            "year": year,
+                            "subject_id": subject.get("subject_id"),
+                            "publication_count": metrics.get("publication_count", 0),
+                            "citation_count": metrics.get("citation_count", 0),
+                            "citations_per_paper": metrics.get("citations_per_paper", 0.0),
+                            "multi_institution_rate": metrics.get("multi_institution_rate", 0.0),
+                            "international_collaboration_rate": metrics.get("international_collaboration_rate", 0.0),
+                            "quality_proxy": metrics.get("quality_proxy", 0.0),
+                            "productivity_proxy": metrics.get("productivity_proxy", 0.0),
+                            "h_index": metrics.get("h_index", 0),
+                            "top_percentile_citations": metrics.get("top_percentile_citations", 0.0),
+                            "subject_strength_basis": 0.0
+                        }
+                    else:
+                        indicators = build_institution_indicators(
+                            inst,
+                            works_data=works_data_map.get(openalex_id, []),
+                            year=year,
+                            subject_id=subject.get("subject_id")
+                        )
                     all_indicators.append(indicators)
     
     logger.info(f"Built {len(all_indicators)} indicator records")

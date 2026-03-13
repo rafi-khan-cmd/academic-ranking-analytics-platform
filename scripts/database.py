@@ -4,14 +4,19 @@ Database connection and utility functions for PostgreSQL.
 
 from sqlalchemy import create_engine, text
 from sqlalchemy.orm import sessionmaker
-from sqlalchemy.pool import NullPool
+from sqlalchemy.pool import NullPool, QueuePool
+from sqlalchemy.exc import OperationalError
 from contextlib import contextmanager
-from typing import Generator, Tuple
+from typing import Generator, Tuple, Optional
 import logging
+import time
 
 from scripts.config import DB_CONFIG
 
 logger = logging.getLogger(__name__)
+
+# Shared engine instance (singleton pattern)
+_shared_engine: Optional[object] = None
 
 
 def _build_connection_string(host: str, port: int, database: str, user: str, password: str) -> str:
@@ -89,16 +94,30 @@ def validate_host_user_mode(host: str, user: str):
             )
 
 
-def create_db_engine(port_override=None):
-    """Create SQLAlchemy engine for database operations.
+def create_db_engine(port_override=None, force_new=False):
+    """
+    Create or return shared SQLAlchemy engine for database operations.
+    
+    Uses singleton pattern to ensure only one engine instance exists,
+    preventing connection exhaustion in Supabase pooler mode.
     
     Args:
         port_override: Optional port to use instead of DB_CONFIG['port']
+        force_new: If True, create a new engine even if one exists (for testing)
+    
+    Returns:
+        SQLAlchemy engine instance
     
     Raises:
         RuntimeError: If host is localhost or host/user mismatch
         ValueError: If required credentials are missing
     """
+    global _shared_engine
+    
+    # Return existing engine unless force_new is True
+    if _shared_engine is not None and not force_new:
+        return _shared_engine
+    
     # Get required credentials - will raise ValueError if missing
     host = DB_CONFIG['host']
     port = port_override if port_override is not None else DB_CONFIG['port']
@@ -113,9 +132,6 @@ def create_db_engine(port_override=None):
             "Please set POSTGRES_HOST, POSTGRES_PORT, POSTGRES_DB, POSTGRES_USER, "
             "and POSTGRES_PASSWORD in Streamlit secrets or environment variables."
         )
-    
-    # Safe debug logging (never print password)
-    print(f"[DB] host={host} port={port} user={user}")
     
     # Detect connection mode and validate host/user match
     try:
@@ -139,24 +155,108 @@ def create_db_engine(port_override=None):
         connection_string += "?pgbouncer=true"
         logger.debug("Added pgbouncer=true parameter")
     
-    # Supabase connection settings - always use SSL require
-    connect_args = {
-        "connect_timeout": 15,
-        "sslmode": "require"
-    }
+    # Determine pool strategy based on connection mode
+    # Session pooler mode: Use NullPool (no connection pooling at SQLAlchemy level)
+    # Direct mode: Use QueuePool with conservative settings
+    if mode == "session_pooler":
+        poolclass = NullPool
+        pool_log = "NullPool (session pooler mode)"
+        
+        # NullPool-specific settings (no pool_size, max_overflow, or pool_timeout)
+        engine_kwargs = {
+            "pool_pre_ping": True,  # Verify connections before using
+            "pool_recycle": 300,    # Recycle connections after 5 minutes
+            "connect_args": {
+                "connect_timeout": 15,
+                "sslmode": "require"
+            }
+        }
+    else:
+        poolclass = QueuePool
+        pool_log = "QueuePool (direct mode, pool_size=1, max_overflow=0)"
+        
+        # QueuePool-specific settings (includes pool_size, max_overflow, pool_timeout)
+        engine_kwargs = {
+            "pool_pre_ping": True,  # Verify connections before using
+            "pool_recycle": 300,    # Recycle connections after 5 minutes
+            "pool_size": 1,         # Only 1 connection in pool
+            "max_overflow": 0,      # No overflow connections
+            "pool_timeout": 30,     # Wait up to 30s for connection from pool
+            "connect_args": {
+                "connect_timeout": 15,
+                "sslmode": "require"
+            }
+        }
     
     engine = create_engine(
         connection_string,
-        pool_pre_ping=True,
-        connect_args={"sslmode": "require"}
+        poolclass=poolclass,
+        **engine_kwargs
     )
+    
+    logger.info(f"Created database engine: {pool_log} for {user}@{host}:{port}/{database}")
+    
+    # Store as shared engine if not forcing new
+    if not force_new:
+        _shared_engine = engine
+    
     return engine
+
+
+def dispose_db_engine():
+    """Dispose the shared database engine and release all connections."""
+    global _shared_engine
+    if _shared_engine is not None:
+        logger.info("Disposing shared database engine and releasing connections")
+        _shared_engine.dispose()
+        _shared_engine = None
+
+
+def get_db_engine_with_retry(max_retries=3, base_delay=2):
+    """
+    Get database engine with retry logic for connection exhaustion errors.
+    
+    Args:
+        max_retries: Maximum number of retry attempts
+        base_delay: Base delay in seconds for exponential backoff
+    
+    Returns:
+        SQLAlchemy engine instance
+    
+    Raises:
+        OperationalError: If connection fails after all retries
+    """
+    for attempt in range(max_retries):
+        try:
+            engine = create_db_engine()
+            # Test connection immediately
+            with engine.connect() as conn:
+                conn.execute(text("SELECT 1"))
+            return engine
+        except OperationalError as e:
+            error_str = str(e).lower()
+            if "max clients" in error_str or "maxclients" in error_str:
+                if attempt < max_retries - 1:
+                    delay = base_delay * (2 ** attempt)  # Exponential backoff: 2s, 4s, 8s
+                    logger.warning(
+                        f"Connection exhaustion detected (attempt {attempt + 1}/{max_retries}). "
+                        f"Retrying in {delay}s..."
+                    )
+                    time.sleep(delay)
+                    continue
+                else:
+                    logger.error(f"Connection exhaustion after {max_retries} retries")
+                    raise
+            else:
+                # Not a connection exhaustion error, re-raise immediately
+                raise
+    raise OperationalError("Failed to acquire database connection after retries", None, None)
 
 
 @contextmanager
 def get_db_session() -> Generator:
-    """Context manager for database sessions."""
-    engine = create_db_engine()
+    """Context manager for database sessions using shared engine."""
+    engine = create_db_engine()  # Uses shared engine
     Session = sessionmaker(bind=engine)
     session = Session()
     try:
@@ -168,26 +268,25 @@ def get_db_session() -> Generator:
         raise
     finally:
         session.close()
-        engine.dispose()
+        # Do NOT dispose engine here - it's shared
 
 
 def execute_sql_file(engine, file_path: str) -> None:
-    """Execute SQL commands from a file."""
+    """Execute SQL commands from a file using provided engine."""
     with open(file_path, 'r') as f:
         sql_content = f.read()
     
     # Split by semicolons and execute each statement
     statements = [s.strip() for s in sql_content.split(';') if s.strip()]
     
-    with engine.connect() as conn:
+    with engine.begin() as conn:  # Use begin() for transaction management
         for statement in statements:
             if statement:
                 try:
                     conn.execute(text(statement))
-                    conn.commit()
                 except Exception as e:
                     logger.warning(f"SQL execution warning: {e}")
-                    conn.rollback()
+                    raise  # Let begin() handle rollback
 
 
 def test_connection() -> Tuple[bool, str]:
@@ -224,7 +323,7 @@ def test_connection() -> Tuple[bool, str]:
         with engine.connect() as conn:
             result = conn.execute(text("SELECT 1"))
             result.fetchone()  # Actually fetch to ensure connection works
-        engine.dispose()
+        # Do NOT dispose - engine is shared
         logger.info(f"Database connection successful")
         return True, f"Connected to {host}:{port} (mode: {mode})"
     except Exception as e:

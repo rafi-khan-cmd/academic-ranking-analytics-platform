@@ -20,6 +20,20 @@ from scripts.config import (
 
 logger = logging.getLogger(__name__)
 
+# Import works aggregator for streaming processing (REQUIRED)
+try:
+    from scripts.works_aggregator import (
+        create_institution_metrics_accumulator,
+        process_works_page,
+        finalize_institution_metrics,
+        MAX_WORKS_PER_INSTITUTION
+    )
+except ImportError as e:
+    # Streaming aggregation is REQUIRED - fail if not available
+    logger.error(f"CRITICAL: works_aggregator module not available: {e}")
+    logger.error("Streaming aggregation is required for memory-efficient processing.")
+    raise RuntimeError("works_aggregator module is required but not available") from e
+
 # Ensure data directory exists
 RAW_DATA_DIR.mkdir(parents=True, exist_ok=True)
 CACHE_DIR = RAW_DATA_DIR / "cache"
@@ -318,36 +332,197 @@ def extract_top_institutions(
     return top_institutions
 
 
-def fetch_institution_works(
+def fetch_institution_works_streaming(
     institution_id: str,
     year: Optional[int] = None,
     years_back: int = DEFAULT_YEARS_BACK,
-    per_page: int = 100,  # OpenAlex max per_page is 100
-    limit: Optional[int] = None,
-    use_cache: bool = True
-) -> List[Dict[str, Any]]:
+    per_page: int = 100,
+    max_works: int = MAX_WORKS_PER_INSTITUTION,
+    use_cache: bool = True,
+    accumulator: Optional[Dict[str, Any]] = None
+) -> Dict[str, Any]:
     """
-    Fetch works (publications) for an institution with year filtering.
+    Fetch and aggregate works for an institution using TRUE streaming processing.
+    
+    Processes works page-by-page and accumulates only essential metrics,
+    keeping memory usage constant instead of growing with each page.
+    
+    NEVER accumulates full work objects - processes and discards immediately.
     
     Args:
         institution_id: OpenAlex institution ID
         year: Specific year (if None, uses years_back)
         years_back: Number of years back from current year
-        per_page: Results per page
-        limit: Maximum works to fetch (None = all)
+        per_page: Results per page (max 100)
+        max_works: Maximum works to process before truncating
         use_cache: Whether to use cached responses
+        accumulator: Optional existing accumulator to update
     
     Returns:
-        List of work records
+        Aggregated metrics dictionary (not full work list)
     """
+    if accumulator is None:
+        accumulator = create_institution_metrics_accumulator(institution_id)
+    
     url = f"{OPENALEX_BASE_URL}/works"
-    all_works = []
     page = 1
     
     # Ensure per_page doesn't exceed OpenAlex limit
     per_page = min(per_page, 100)
     
     # Build year filter
+    if year:
+        year_filter = f"publication_year:{year}"
+    else:
+        current_year = datetime.now().year
+        start_year = current_year - years_back
+        year_filter = f"publication_year:>{start_year}"
+    
+    filter_str = f"institutions.id:{institution_id},{year_filter}"
+    
+    logger.info(
+        f"Processing works for institution {institution_id} "
+        f"(max_works={max_works}, per_page={per_page})..."
+    )
+    
+    stop_reason = None
+    
+    while True:
+        # Check if we've hit the cap BEFORE fetching next page
+        if accumulator["works_processed"] >= max_works:
+            logger.warning(
+                f"Hit max works cap for institution {institution_id}, "
+                f"truncating at {max_works} works (processed: {accumulator['works_processed']})"
+            )
+            accumulator["truncated"] = True
+            stop_reason = "hit_cap"
+            break
+        
+        params = {
+            "filter": filter_str,
+            "per_page": per_page,
+            "page": page
+        }
+        
+        data = make_request_with_retry(url, params=params, use_cache=use_cache)
+        if not data:
+            logger.debug(f"No data returned for institution {institution_id}, page {page}")
+            stop_reason = "api_empty_page"
+            break
+        
+        # Safe extraction with defensive handling
+        works_page = data.get("results", [])
+        
+        # Protect against None or non-list responses
+        if works_page is None:
+            logger.warning(f"OpenAlex returned null results for institution {institution_id}, page {page}")
+            works_page = []
+            stop_reason = "api_null_results"
+            break
+        
+        if not isinstance(works_page, list):
+            logger.warning(
+                f"Unexpected works_page format for institution {institution_id}, page {page}: "
+                f"expected list, got {type(works_page)}"
+            )
+            stop_reason = "api_unexpected_format"
+            break
+        
+        if not works_page:
+            logger.debug(f"No works in page {page} for institution {institution_id}")
+            stop_reason = "pagination_exhausted"
+            break
+        
+        # Store works_processed before processing to detect if cap was hit during processing
+        works_before = accumulator["works_processed"]
+        was_truncated_before = accumulator.get("truncated", False)
+        
+        # CRITICAL: Process this page immediately and discard raw work objects
+        # This is the true streaming step - never accumulate full works
+        process_works_page(accumulator, works_page, max_works=max_works)
+        
+        # Log progress
+        works_count = len(works_page)
+        logger.info(
+            f"Fetched page {page} for {institution_id}: "
+            f"{works_count} works in page, {accumulator['works_processed']} total processed "
+            f"(cap: {max_works})"
+        )
+        
+        # Check if cap was hit during processing (truncated flag changed from False to True)
+        cap_hit_during_processing = accumulator.get("truncated", False) and not was_truncated_before
+        
+        # Check if there are more pages BEFORE clearing reference
+        if works_count < per_page:
+            # Natural end - no more pages available
+            # Only mark as truncated if we actually hit the cap during processing
+            if cap_hit_during_processing:
+                logger.warning(
+                    f"Institution {institution_id} hit cap during page processing: "
+                    f"{accumulator['works_processed']} works (cap: {max_works})"
+                )
+                stop_reason = "hit_cap"
+            else:
+                # Natural end - clear truncated flag if it was incorrectly set
+                accumulator["truncated"] = False
+                stop_reason = "end_of_results"
+            break
+        
+        # Explicitly clear reference to help GC (after we're done with it)
+        works_page = None
+        
+        page += 1
+        time.sleep(RATE_LIMIT_DELAY)
+        
+        # Check cap again after processing - but only mark truncated if we actually stopped due to cap
+        # If we naturally finished (no more pages), truncated flag should already be False
+        if accumulator["works_processed"] >= max_works:
+            # Check if we hit the cap during processing
+            if cap_hit_during_processing:
+                # Cap was hit during processing, already marked as truncated
+                stop_reason = "hit_cap"
+                break
+            # Otherwise continue to next page if available
+    
+    # Log completion with stop reason
+    if stop_reason is None:
+        stop_reason = "unknown"
+    
+    logger.info(
+        f"Completed streaming aggregation for {institution_id}: "
+        f"{accumulator['works_processed']} works processed "
+        f"(stopped: {stop_reason}, cap: {max_works}), "
+        f"accumulator size remains compact (no full works stored)"
+    )
+    
+    return accumulator
+
+
+def fetch_institution_works(
+    institution_id: str,
+    year: Optional[int] = None,
+    years_back: int = DEFAULT_YEARS_BACK,
+    per_page: int = 100,
+    limit: Optional[int] = None,
+    use_cache: bool = True
+) -> List[Dict[str, Any]]:
+    """
+    ⚠️ DEPRECATED - DO NOT USE ⚠️
+    
+    Legacy function that accumulates full works in memory.
+    This function WILL cause memory exhaustion for large institutions.
+    
+    Use fetch_institution_works_streaming() instead for memory-efficient processing.
+    
+    This function is kept ONLY for backward compatibility with old code.
+    The main pipeline does NOT use this function.
+    """
+    url = f"{OPENALEX_BASE_URL}/works"
+    all_works = []
+    page = 1
+    
+    per_page = min(per_page, 100)
+    
     if year:
         year_filter = f"publication_year:{year}"
     else:
@@ -379,7 +554,6 @@ def fetch_institution_works(
         
         all_works.extend(works)
         
-        # Check if there are more pages
         if len(works) < per_page:
             break
         
@@ -398,64 +572,140 @@ def fetch_institution_works_batch(
     institution_ids: List[str],
     year: Optional[int] = None,
     years_back: int = DEFAULT_YEARS_BACK,
-    limit_per_institution: int = 1000,
+    limit_per_institution: int = 200,  # Reduced default, capped at MAX_WORKS_PER_INSTITUTION
     use_cache: bool = True,
     checkpoint_file: Optional[Path] = None
-) -> Dict[str, List[Dict[str, Any]]]:
+) -> Dict[str, Dict[str, Any]]:
     """
-    Fetch works for multiple institutions in batch with checkpointing.
+    Fetch and aggregate works for multiple institutions using TRUE streaming processing.
+    
+    Uses memory-efficient streaming aggregation instead of accumulating full work lists.
+    Returns aggregated metrics dictionary instead of full works lists.
+    
+    NEVER accumulates full work objects - processes page-by-page and discards immediately.
     
     Args:
         institution_ids: List of OpenAlex institution IDs
         year: Optional specific year
         years_back: Number of years back from current year
-        limit_per_institution: Maximum works per institution
+        limit_per_institution: Maximum works per institution (capped at MAX_WORKS_PER_INSTITUTION)
         use_cache: Whether to use cached responses
         checkpoint_file: Optional path to checkpoint file for resuming
     
     Returns:
-        Dictionary mapping institution_id to list of works
+        Dictionary mapping institution_id to aggregated metrics (NOT full work lists)
     """
-    logger.info(f"Fetching works for {len(institution_ids)} institutions...")
+    logger.info(f"Fetching works for {len(institution_ids)} institutions (TRUE streaming mode)...")
     
-    # Load checkpoint if exists
-    all_works = {}
-    if checkpoint_file and checkpoint_file.exists():
+    # Cap limit_per_institution at MAX_WORKS_PER_INSTITUTION
+    limit_per_institution = min(limit_per_institution, MAX_WORKS_PER_INSTITUTION)
+    logger.info(f"Using max works cap: {MAX_WORKS_PER_INSTITUTION} per institution")
+    
+    # Load checkpoint if exists (only aggregated metrics, never full works)
+    # Skip checkpoint loading if full_refresh is requested
+    aggregated_metrics = {}
+    processed_ids = set()
+    
+    # Check if we should load checkpoint (only if not full refresh and checkpoint exists)
+    should_load_checkpoint = checkpoint_file and checkpoint_file.exists() and use_cache
+    
+    if should_load_checkpoint:
         try:
-            with open(checkpoint_file, 'r', encoding='utf-8') as f:
-                checkpoint_data = json.load(f)
-                all_works = checkpoint_data.get("works", {})
-                processed_ids = set(checkpoint_data.get("processed_ids", []))
-                logger.info(f"Resuming from checkpoint: {len(processed_ids)} institutions already processed")
+            # Check file size first - old format with full works can be huge
+            file_size_mb = checkpoint_file.stat().st_size / (1024 * 1024)
+            if file_size_mb > 10:  # If checkpoint > 10MB, likely old format with full works
+                logger.warning(
+                    f"Checkpoint file is {file_size_mb:.1f}MB - likely contains full works data. "
+                    f"Ignoring old checkpoint and starting fresh to prevent memory issues."
+                )
+            else:
+                with open(checkpoint_file, 'r', encoding='utf-8') as f:
+                    checkpoint_data = json.load(f)
+                    # Check checkpoint version - old format has "works" key, new has "aggregated_metrics"
+                    if "works" in checkpoint_data and "aggregated_metrics" not in checkpoint_data:
+                        logger.warning(
+                            "Checkpoint file contains old format with full works data. "
+                            "Ignoring old checkpoint and starting fresh to prevent memory issues."
+                        )
+                    else:
+                        # New format: aggregated metrics only
+                        aggregated_metrics_raw = checkpoint_data.get("aggregated_metrics", {})
+                        processed_ids = set(checkpoint_data.get("processed_ids", []))
+                        
+                        # Sanitize checkpoint data: validate and fix truncation flags
+                        aggregated_metrics = {}
+                        for inst_id, metrics in aggregated_metrics_raw.items():
+                            works_processed = metrics.get("works_processed", 0)
+                            old_truncated = metrics.get("truncated", False)
+                            
+                            # Validate truncation flag: only True if works_processed >= MAX_WORKS_PER_INSTITUTION
+                            validated_truncated = old_truncated and works_processed >= MAX_WORKS_PER_INSTITUTION
+                            
+                            # Create sanitized metrics dict
+                            sanitized_metrics = dict(metrics)
+                            sanitized_metrics["truncated"] = validated_truncated
+                            
+                            # Log if we fixed an incorrect truncation flag
+                            if old_truncated and not validated_truncated:
+                                logger.debug(
+                                    f"Sanitized checkpoint: institution {inst_id} had incorrect truncation flag "
+                                    f"(works_processed={works_processed} < {MAX_WORKS_PER_INSTITUTION})"
+                                )
+                            
+                            aggregated_metrics[inst_id] = sanitized_metrics
+                        
+                        logger.info(f"Loaded existing aggregated checkpoint: {len(processed_ids)} institutions already processed")
+                        logger.info("Resuming from checkpoint - skipping already processed institutions")
         except Exception as e:
-            logger.warning(f"Error loading checkpoint: {e}")
-            processed_ids = set()
+            logger.warning(f"Error loading checkpoint: {e}. Starting fresh.")
+    elif checkpoint_file and checkpoint_file.exists() and not use_cache:
+        logger.info("Full refresh requested - ignoring existing checkpoint and starting fresh aggregation")
     else:
-        processed_ids = set()
+        logger.info("Starting fresh aggregation (no checkpoint found)")
     
-    # Process each institution
-    for i, inst_id in enumerate(tqdm(institution_ids, desc="Fetching works")):
+    # Process each institution with TRUE streaming
+    for i, inst_id in enumerate(institution_ids):
         if inst_id in processed_ids:
+            logger.debug(f"Skipping {inst_id} (already processed in checkpoint)")
             continue
         
-        works = fetch_institution_works(
+        logger.info(f"Processing works for institution {i+1}/{len(institution_ids)}: {inst_id}")
+        
+        # Use TRUE streaming aggregation - never accumulates full works
+        accumulator = fetch_institution_works_streaming(
             inst_id,
             year=year,
             years_back=years_back,
-            limit=limit_per_institution,
+            per_page=100,
+            max_works=limit_per_institution,
             use_cache=use_cache
         )
         
-        all_works[inst_id] = works
+        # Finalize metrics (compact aggregated structure only)
+        final_metrics = finalize_institution_metrics(accumulator)
+        aggregated_metrics[inst_id] = final_metrics
         processed_ids.add(inst_id)
         
-        # Save checkpoint every 10 institutions
-        if checkpoint_file and (i + 1) % 10 == 0:
+        if final_metrics.get("truncated"):
+            logger.warning(
+                f"Institution {inst_id} truncated at {final_metrics['works_processed']} works "
+                f"(cap: {MAX_WORKS_PER_INSTITUTION})"
+            )
+        
+        logger.info(
+            f"Completed institution {i+1}/{len(institution_ids)}: "
+            f"{final_metrics['works_processed']} works processed, "
+            f"aggregated metrics only (no full works stored)"
+        )
+        
+        # Save checkpoint after each institution (stores only aggregated metrics)
+        if checkpoint_file:
             try:
                 with open(checkpoint_file, 'w', encoding='utf-8') as f:
                     json.dump({
                         "processed_ids": list(processed_ids),
-                        "works": all_works
+                        "aggregated_metrics": aggregated_metrics,  # Only compact metrics, never full works
+                        "checkpoint_version": "2.0"  # Mark as new format
                     }, f, indent=2, ensure_ascii=False)
             except Exception as e:
                 logger.warning(f"Error saving checkpoint: {e}")
@@ -466,25 +716,47 @@ def fetch_institution_works_batch(
         else:
             time.sleep(RATE_LIMIT_DELAY)
     
-    # Save final checkpoint
+    # Save final checkpoint (only aggregated metrics)
     if checkpoint_file:
         try:
             with open(checkpoint_file, 'w', encoding='utf-8') as f:
                 json.dump({
                     "processed_ids": list(processed_ids),
-                    "works": all_works
+                    "aggregated_metrics": aggregated_metrics,
+                    "checkpoint_version": "2.0"
                 }, f, indent=2, ensure_ascii=False)
         except Exception as e:
             logger.warning(f"Error saving final checkpoint: {e}")
     
-    # Save works data
+    # Save aggregated metrics (much smaller than full works - KBs not GBs)
     save_raw_data(
-        [{"institution_id": k, "works": v} for k, v in all_works.items()],
-        "institution_works_raw.json"
+        [{"institution_id": k, "metrics": v} for k, v in aggregated_metrics.items()],
+        "institution_works_aggregated.json"
     )
     
-    logger.info(f"Fetched works data for {len(all_works)} institutions")
-    return all_works
+    total_works = sum(m.get("works_processed", 0) for m in aggregated_metrics.values())
+    
+    # Only count institutions that actually hit the cap (works_processed >= MAX_WORKS_PER_INSTITUTION)
+    truly_truncated = [
+        (inst_id, m) for inst_id, m in aggregated_metrics.items()
+        if m.get("works_processed", 0) >= MAX_WORKS_PER_INSTITUTION
+    ]
+    truncated_count = len(truly_truncated)
+    
+    logger.info(
+        f"Completed TRUE streaming works aggregation for {len(aggregated_metrics)} institutions: "
+        f"{total_works:,} total works processed, "
+        f"memory usage remains constant (aggregated metrics only)"
+    )
+    if truncated_count > 0:
+        logger.warning(
+            f"{truncated_count} institutions hit the {MAX_WORKS_PER_INSTITUTION:,} works cap: "
+            f"{', '.join([inst_id for inst_id, _ in truly_truncated[:5]])}"
+            + (f" and {truncated_count - 5} more" if truncated_count > 5 else "")
+        )
+    
+    # Return aggregated metrics ONLY - never return full works lists
+    return aggregated_metrics
 
 
 def fetch_topics(

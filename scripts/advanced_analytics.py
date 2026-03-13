@@ -4,49 +4,85 @@ Implements feature importance, clustering, and sensitivity analysis.
 """
 
 import logging
-from typing import List, Dict, Tuple
+from typing import List, Dict, Tuple, Optional
 import pandas as pd
 import numpy as np
 from sklearn.ensemble import RandomForestRegressor
 from sklearn.cluster import KMeans
 from sklearn.preprocessing import StandardScaler
-from sqlalchemy import text
+from sqlalchemy import text, bindparam
 
-from scripts.database import create_db_engine
+from scripts.database import create_db_engine, get_db_engine_with_retry
 from scripts.config import DEFAULT_YEAR
+from sqlalchemy import Engine
 
 logger = logging.getLogger(__name__)
 
 
-def compute_feature_importance(year: int = DEFAULT_YEAR) -> Dict[str, float]:
+def compute_feature_importance(year: int = DEFAULT_YEAR,
+                               institution_ids: Optional[List[int]] = None,
+                               engine: Optional[Engine] = None) -> Dict[str, float]:
     """
     Compute feature importance using Random Forest to understand
     which indicators are most associated with ranking scores.
+    
+    Args:
+        year: Year for feature importance analysis
+        institution_ids: Optional list of institution_ids to scope analysis to (None for all)
+    
+    Returns:
+        Dictionary mapping feature names to importance scores
     """
-    logger.info("Computing feature importance...")
+    scope_info = f" (scoped to {len(institution_ids)} institutions)" if institution_ids else " (all institutions)"
+    logger.info(f"Computing feature importance (year={year}){scope_info}...")
     
-    engine = create_db_engine()
+    # Use provided engine or get shared engine
+    if engine is None:
+        engine = create_db_engine()
     
-    query = text("""
-        SELECT 
-            nm.publication_score,
-            nm.citation_score,
-            nm.collaboration_score,
-            nm.quality_score,
-            nm.subject_strength_score,
-            nm.productivity_score,
-            r.overall_score
-        FROM normalized_metrics nm
-        JOIN ranking_results r ON 
-            nm.institution_id = r.institution_id 
-            AND nm.year = r.year
-        WHERE nm.year = :year
-          AND r.methodology_name = 'Balanced Model'
-          AND nm.subject_id IS NULL
-    """)
+    # Build query with optional institution_id filtering
+    if institution_ids:
+        query = text("""
+            SELECT 
+                nm.publication_score,
+                nm.citation_score,
+                nm.collaboration_score,
+                nm.quality_score,
+                nm.subject_strength_score,
+                nm.productivity_score,
+                r.overall_score
+            FROM normalized_metrics nm
+            JOIN ranking_results r ON 
+                nm.institution_id = r.institution_id 
+                AND nm.year = r.year
+            WHERE nm.year = :year
+              AND r.methodology_name = 'Balanced Model'
+              AND nm.subject_id IS NULL
+              AND nm.institution_id IN :institution_ids
+        """).bindparams(bindparam('institution_ids', expanding=True))
+        params = {"year": year, "institution_ids": institution_ids}
+    else:
+        query = text("""
+            SELECT 
+                nm.publication_score,
+                nm.citation_score,
+                nm.collaboration_score,
+                nm.quality_score,
+                nm.subject_strength_score,
+                nm.productivity_score,
+                r.overall_score
+            FROM normalized_metrics nm
+            JOIN ranking_results r ON 
+                nm.institution_id = r.institution_id 
+                AND nm.year = r.year
+            WHERE nm.year = :year
+              AND r.methodology_name = 'Balanced Model'
+              AND nm.subject_id IS NULL
+        """)
+        params = {"year": year}
     
     with engine.connect() as conn:
-        df = pd.read_sql(query, conn, params={"year": year})
+        df = pd.read_sql(query, conn, params=params)
     
     if df.empty:
         logger.warning("No data found for feature importance analysis")
@@ -75,43 +111,78 @@ def compute_feature_importance(year: int = DEFAULT_YEAR) -> Dict[str, float]:
     return importance_dict
 
 
-def compute_institution_clusters(n_clusters: int = 4, year: int = DEFAULT_YEAR) -> List[Dict]:
+def compute_institution_clusters(n_clusters: int = 4, year: int = DEFAULT_YEAR,
+                                institution_ids: Optional[List[int]] = None,
+                                engine: Optional[Engine] = None) -> List[Dict]:
     """
     Cluster institutions into profiles using KMeans.
     
     Args:
         n_clusters: Number of clusters
         year: Year for clustering
+        institution_ids: Optional list of institution_ids to scope clustering to (None for all)
     
     Returns:
         List of cluster assignments
     """
-    logger.info(f"Computing institution clusters (n_clusters={n_clusters})...")
+    scope_info = f" (scoped to {len(institution_ids)} institutions)" if institution_ids else " (all institutions)"
+    logger.info(f"Computing institution clusters (n_clusters={n_clusters}, year={year}){scope_info}...")
     
-    engine = create_db_engine()
+    # Use provided engine or get shared engine
+    if engine is None:
+        engine = create_db_engine()
     
-    query = text("""
-        SELECT 
-            nm.institution_id,
-            i.institution_name,
-            i.country,
-            nm.publication_score,
-            nm.citation_score,
-            nm.collaboration_score,
-            nm.quality_score,
-            nm.subject_strength_score,
-            nm.productivity_score
-        FROM normalized_metrics nm
-        JOIN institutions i ON nm.institution_id = i.institution_id
-        WHERE nm.year = :year
-          AND nm.subject_id IS NULL
-    """)
+    # Build query with optional institution_id filtering
+    if institution_ids:
+        query = text("""
+            SELECT 
+                nm.institution_id,
+                i.institution_name,
+                i.country,
+                nm.publication_score,
+                nm.citation_score,
+                nm.collaboration_score,
+                nm.quality_score,
+                nm.subject_strength_score,
+                nm.productivity_score
+            FROM normalized_metrics nm
+            JOIN institutions i ON nm.institution_id = i.institution_id
+            WHERE nm.year = :year
+              AND nm.subject_id IS NULL
+              AND nm.institution_id IN :institution_ids
+        """).bindparams(bindparam('institution_ids', expanding=True))
+        params = {"year": year, "institution_ids": institution_ids}
+    else:
+        query = text("""
+            SELECT 
+                nm.institution_id,
+                i.institution_name,
+                i.country,
+                nm.publication_score,
+                nm.citation_score,
+                nm.collaboration_score,
+                nm.quality_score,
+                nm.subject_strength_score,
+                nm.productivity_score
+            FROM normalized_metrics nm
+            JOIN institutions i ON nm.institution_id = i.institution_id
+            WHERE nm.year = :year
+              AND nm.subject_id IS NULL
+        """)
+        params = {"year": year}
     
     with engine.connect() as conn:
-        df = pd.read_sql(query, conn, params={"year": year})
+        df = pd.read_sql(query, conn, params=params)
     
     if df.empty:
         logger.warning("No data found for clustering")
+        return []
+    
+    n_samples = len(df)
+    
+    # Safety check: need at least 2 samples for clustering
+    if n_samples < 2:
+        logger.warning(f"Not enough institutions for clustering (n_samples={n_samples}). Skipping clustering.")
         return []
     
     # Prepare features
@@ -126,13 +197,41 @@ def compute_institution_clusters(n_clusters: int = 4, year: int = DEFAULT_YEAR) 
     scaler = StandardScaler()
     X_scaled = scaler.fit_transform(X)
     
-    # Perform clustering
-    kmeans = KMeans(n_clusters=n_clusters, random_state=42, n_init=10)
+    # Determine effective cluster count based on sample size
+    # KMeans requires n_samples >= n_clusters
+    effective_clusters = min(n_clusters, n_samples)
+    
+    # Additional check: count distinct points after scaling (handle duplicate rows)
+    # Convert to tuples to check for duplicates
+    distinct_points = set(tuple(row) for row in X_scaled)
+    distinct_point_count = len(distinct_points)
+    
+    # Further reduce if we have fewer distinct points than effective_clusters
+    effective_clusters = min(effective_clusters, distinct_point_count)
+    
+    # Final safety check: need at least 2 clusters
+    if effective_clusters < 2:
+        logger.warning(
+            f"Insufficient distinct points for clustering: {distinct_point_count} distinct points "
+            f"from {n_samples} samples (need at least 2). Skipping clustering."
+        )
+        return []
+    
+    # Log reduction if it occurred
+    if effective_clusters < n_clusters:
+        logger.warning(
+            "Reducing cluster count from %s to %s due to small sample size",
+            n_clusters,
+            effective_clusters
+        )
+    
+    # Perform clustering with effective cluster count
+    kmeans = KMeans(n_clusters=effective_clusters, random_state=42, n_init=10)
     cluster_labels = kmeans.fit_predict(X_scaled)
     
     # Create cluster descriptions based on centroids
     cluster_descriptions = []
-    for i in range(n_clusters):
+    for i in range(effective_clusters):
         centroid = kmeans.cluster_centers_[i]
         # Find dominant features
         feature_values = {
@@ -168,7 +267,7 @@ def compute_institution_clusters(n_clusters: int = 4, year: int = DEFAULT_YEAR) 
             "cluster_id": int(cluster_labels[idx])
         })
     
-    logger.info(f"Computed {n_clusters} clusters for {len(results)} institutions")
+    logger.info(f"Computed {effective_clusters} clusters for {len(results)} institutions")
     return results
 
 
@@ -235,31 +334,60 @@ def save_clusters_to_db(clusters: List[Dict], method: str = "kmeans", n_clusters
     logger.info("Clusters saved to database")
 
 
-def compute_sensitivity_analysis(year: int = DEFAULT_YEAR) -> List[Dict]:
+def compute_sensitivity_analysis(year: int = DEFAULT_YEAR,
+                                 institution_ids: Optional[List[int]] = None,
+                                 engine: Optional[Engine] = None) -> List[Dict]:
     """
     Compute sensitivity/volatility analysis to measure how much
     institutions move under different methodology assumptions.
+    
+    Args:
+        year: Year for sensitivity analysis
+        institution_ids: Optional list of institution_ids to scope analysis to (None for all)
+    
+    Returns:
+        List of sensitivity analysis results
     """
-    logger.info("Computing sensitivity analysis...")
+    scope_info = f" (scoped to {len(institution_ids)} institutions)" if institution_ids else " (all institutions)"
+    logger.info(f"Computing sensitivity analysis (year={year}){scope_info}...")
     
-    engine = create_db_engine()
+    # Use provided engine or get shared engine
+    if engine is None:
+        engine = create_db_engine()
     
-    # Get rankings for all methodologies
-    query = text("""
-        SELECT 
-            r.institution_id,
-            i.institution_name,
-            i.country,
-            r.methodology_name,
-            r.rank_position
-        FROM ranking_results r
-        JOIN institutions i ON r.institution_id = i.institution_id
-        WHERE r.year = :year
-          AND r.subject_id IS NULL
-    """)
+    # Build query with optional institution_id filtering
+    if institution_ids:
+        query = text("""
+            SELECT 
+                r.institution_id,
+                i.institution_name,
+                i.country,
+                r.methodology_name,
+                r.rank_position
+            FROM ranking_results r
+            JOIN institutions i ON r.institution_id = i.institution_id
+            WHERE r.year = :year
+              AND r.subject_id IS NULL
+              AND r.institution_id IN :institution_ids
+        """).bindparams(bindparam('institution_ids', expanding=True))
+        params = {"year": year, "institution_ids": institution_ids}
+    else:
+        query = text("""
+            SELECT 
+                r.institution_id,
+                i.institution_name,
+                i.country,
+                r.methodology_name,
+                r.rank_position
+            FROM ranking_results r
+            JOIN institutions i ON r.institution_id = i.institution_id
+            WHERE r.year = :year
+              AND r.subject_id IS NULL
+        """)
+        params = {"year": year}
     
     with engine.connect() as conn:
-        df = pd.read_sql(query, conn, params={"year": year})
+        df = pd.read_sql(query, conn, params=params)
     
     if df.empty:
         logger.warning("No data found for sensitivity analysis")

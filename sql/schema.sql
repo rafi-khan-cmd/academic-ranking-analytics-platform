@@ -20,8 +20,8 @@ CREATE TABLE IF NOT EXISTS institutions (
     UNIQUE(canonical_name, country)
 );
 
-CREATE INDEX idx_institutions_country ON institutions(country);
-CREATE INDEX idx_institutions_canonical_name ON institutions(canonical_name);
+CREATE INDEX IF NOT EXISTS idx_institutions_country ON institutions(country);
+CREATE INDEX IF NOT EXISTS idx_institutions_canonical_name ON institutions(canonical_name);
 
 -- Subjects table
 CREATE TABLE IF NOT EXISTS subjects (
@@ -31,7 +31,7 @@ CREATE TABLE IF NOT EXISTS subjects (
     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
 );
 
-CREATE INDEX idx_subjects_group ON subjects(subject_group);
+CREATE INDEX IF NOT EXISTS idx_subjects_group ON subjects(subject_group);
 
 -- Raw metrics table
 CREATE TABLE IF NOT EXISTS raw_metrics (
@@ -51,9 +51,9 @@ CREATE TABLE IF NOT EXISTS raw_metrics (
     UNIQUE(institution_id, subject_id, year)
 );
 
-CREATE INDEX idx_raw_metrics_institution ON raw_metrics(institution_id);
-CREATE INDEX idx_raw_metrics_subject ON raw_metrics(subject_id);
-CREATE INDEX idx_raw_metrics_year ON raw_metrics(year);
+CREATE INDEX IF NOT EXISTS idx_raw_metrics_institution ON raw_metrics(institution_id);
+CREATE INDEX IF NOT EXISTS idx_raw_metrics_subject ON raw_metrics(subject_id);
+CREATE INDEX IF NOT EXISTS idx_raw_metrics_year ON raw_metrics(year);
 
 -- Normalized metrics table
 CREATE TABLE IF NOT EXISTS normalized_metrics (
@@ -72,9 +72,9 @@ CREATE TABLE IF NOT EXISTS normalized_metrics (
     UNIQUE(institution_id, subject_id, year)
 );
 
-CREATE INDEX idx_normalized_metrics_institution ON normalized_metrics(institution_id);
-CREATE INDEX idx_normalized_metrics_subject ON normalized_metrics(subject_id);
-CREATE INDEX idx_normalized_metrics_year ON normalized_metrics(year);
+CREATE INDEX IF NOT EXISTS idx_normalized_metrics_institution ON normalized_metrics(institution_id);
+CREATE INDEX IF NOT EXISTS idx_normalized_metrics_subject ON normalized_metrics(subject_id);
+CREATE INDEX IF NOT EXISTS idx_normalized_metrics_year ON normalized_metrics(year);
 
 -- Methodology weights table
 CREATE TABLE IF NOT EXISTS methodology_weights (
@@ -108,11 +108,11 @@ CREATE TABLE IF NOT EXISTS ranking_results (
     UNIQUE(institution_id, subject_id, year, methodology_name)
 );
 
-CREATE INDEX idx_ranking_results_institution ON ranking_results(institution_id);
-CREATE INDEX idx_ranking_results_subject ON ranking_results(subject_id);
-CREATE INDEX idx_ranking_results_methodology ON ranking_results(methodology_name);
-CREATE INDEX idx_ranking_results_year ON ranking_results(year);
-CREATE INDEX idx_ranking_results_rank ON ranking_results(rank_position);
+CREATE INDEX IF NOT EXISTS idx_ranking_results_institution ON ranking_results(institution_id);
+CREATE INDEX IF NOT EXISTS idx_ranking_results_subject ON ranking_results(subject_id);
+CREATE INDEX IF NOT EXISTS idx_ranking_results_methodology ON ranking_results(methodology_name);
+CREATE INDEX IF NOT EXISTS idx_ranking_results_year ON ranking_results(year);
+CREATE INDEX IF NOT EXISTS idx_ranking_results_rank ON ranking_results(rank_position);
 
 -- Institution clusters table
 CREATE TABLE IF NOT EXISTS institution_clusters (
@@ -126,8 +126,8 @@ CREATE TABLE IF NOT EXISTS institution_clusters (
     UNIQUE(institution_id, cluster_method)
 );
 
-CREATE INDEX idx_clusters_institution ON institution_clusters(institution_id);
-CREATE INDEX idx_clusters_label ON institution_clusters(cluster_label);
+CREATE INDEX IF NOT EXISTS idx_clusters_institution ON institution_clusters(institution_id);
+CREATE INDEX IF NOT EXISTS idx_clusters_label ON institution_clusters(cluster_label);
 
 -- Sensitivity results table
 CREATE TABLE IF NOT EXISTS sensitivity_results (
@@ -145,8 +145,8 @@ CREATE TABLE IF NOT EXISTS sensitivity_results (
     UNIQUE(institution_id, subject_id, year)
 );
 
-CREATE INDEX idx_sensitivity_institution ON sensitivity_results(institution_id);
-CREATE INDEX idx_sensitivity_subject ON sensitivity_results(subject_id);
+CREATE INDEX IF NOT EXISTS idx_sensitivity_institution ON sensitivity_results(institution_id);
+CREATE INDEX IF NOT EXISTS idx_sensitivity_subject ON sensitivity_results(subject_id);
 
 -- Country summary table
 CREATE TABLE IF NOT EXISTS country_summary (
@@ -166,8 +166,8 @@ CREATE TABLE IF NOT EXISTS country_summary (
     UNIQUE(country, methodology_name, year)
 );
 
-CREATE INDEX idx_country_summary_country ON country_summary(country);
-CREATE INDEX idx_country_summary_methodology ON country_summary(methodology_name);
+CREATE INDEX IF NOT EXISTS idx_country_summary_country ON country_summary(country);
+CREATE INDEX IF NOT EXISTS idx_country_summary_methodology ON country_summary(methodology_name);
 
 -- Institution resolution table (for ROR entity resolution tracking)
 CREATE TABLE IF NOT EXISTS institution_resolution (
@@ -186,9 +186,9 @@ CREATE TABLE IF NOT EXISTS institution_resolution (
     UNIQUE(openalex_id)
 );
 
-CREATE INDEX idx_resolution_openalex_id ON institution_resolution(openalex_id);
-CREATE INDEX idx_resolution_ror_id ON institution_resolution(ror_id);
-CREATE INDEX idx_resolution_institution_id ON institution_resolution(institution_id);
+CREATE INDEX IF NOT EXISTS idx_resolution_openalex_id ON institution_resolution(openalex_id);
+CREATE INDEX IF NOT EXISTS idx_resolution_ror_id ON institution_resolution(ror_id);
+CREATE INDEX IF NOT EXISTS idx_resolution_institution_id ON institution_resolution(institution_id);
 
 -- Topics table (OpenAlex topics/subjects)
 CREATE TABLE IF NOT EXISTS topics (
@@ -204,9 +204,9 @@ CREATE TABLE IF NOT EXISTS topics (
     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
 );
 
-CREATE INDEX idx_topics_name ON topics(topic_name);
-CREATE INDEX idx_topics_domain ON topics(domain);
-CREATE INDEX idx_topics_subject_group ON topics(custom_subject_group);
+CREATE INDEX IF NOT EXISTS idx_topics_name ON topics(topic_name);
+CREATE INDEX IF NOT EXISTS idx_topics_domain ON topics(domain);
+CREATE INDEX IF NOT EXISTS idx_topics_subject_group ON topics(custom_subject_group);
 
 -- Works table (publication-level data from OpenAlex)
 CREATE TABLE IF NOT EXISTS works (
@@ -227,11 +227,11 @@ CREATE TABLE IF NOT EXISTS works (
     updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
 );
 
-CREATE INDEX idx_works_openalex_id ON works(openalex_work_id);
-CREATE INDEX idx_works_year ON works(publication_year);
-CREATE INDEX idx_works_doi ON works(doi);
-CREATE INDEX idx_works_type ON works(work_type);
-CREATE INDEX idx_works_cited_by ON works(cited_by_count);
+CREATE INDEX IF NOT EXISTS idx_works_openalex_id ON works(openalex_work_id);
+CREATE INDEX IF NOT EXISTS idx_works_year ON works(publication_year);
+CREATE INDEX IF NOT EXISTS idx_works_doi ON works(doi);
+CREATE INDEX IF NOT EXISTS idx_works_type ON works(work_type);
+CREATE INDEX IF NOT EXISTS idx_works_cited_by ON works(cited_by_count);
 
 -- Work topics junction table (many-to-many relationship)
 CREATE TABLE IF NOT EXISTS work_topics (
@@ -243,8 +243,8 @@ CREATE TABLE IF NOT EXISTS work_topics (
     UNIQUE(work_id, topic_id)
 );
 
-CREATE INDEX idx_work_topics_work ON work_topics(work_id);
-CREATE INDEX idx_work_topics_topic ON work_topics(topic_id);
+CREATE INDEX IF NOT EXISTS idx_work_topics_work ON work_topics(work_id);
+CREATE INDEX IF NOT EXISTS idx_work_topics_topic ON work_topics(topic_id);
 
 -- Institution works junction table (many-to-many relationship)
 CREATE TABLE IF NOT EXISTS institution_works (
@@ -257,8 +257,8 @@ CREATE TABLE IF NOT EXISTS institution_works (
     UNIQUE(institution_id, work_id)
 );
 
-CREATE INDEX idx_institution_works_inst ON institution_works(institution_id);
-CREATE INDEX idx_institution_works_work ON institution_works(work_id);
+CREATE INDEX IF NOT EXISTS idx_institution_works_inst ON institution_works(institution_id);
+CREATE INDEX IF NOT EXISTS idx_institution_works_work ON institution_works(work_id);
 
 -- API ingestion log table (for tracking ingestion runs)
 CREATE TABLE IF NOT EXISTS api_ingestion_log (
@@ -276,9 +276,9 @@ CREATE TABLE IF NOT EXISTS api_ingestion_log (
     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
 );
 
-CREATE INDEX idx_ingestion_log_source ON api_ingestion_log(source_name);
-CREATE INDEX idx_ingestion_log_status ON api_ingestion_log(status);
-CREATE INDEX idx_ingestion_log_started ON api_ingestion_log(started_at);
+CREATE INDEX IF NOT EXISTS idx_ingestion_log_source ON api_ingestion_log(source_name);
+CREATE INDEX IF NOT EXISTS idx_ingestion_log_status ON api_ingestion_log(status);
+CREATE INDEX IF NOT EXISTS idx_ingestion_log_started ON api_ingestion_log(started_at);
 
 -- Benchmark rankings table (for external ranking tables)
 CREATE TABLE IF NOT EXISTS benchmark_rankings (
@@ -295,7 +295,7 @@ CREATE TABLE IF NOT EXISTS benchmark_rankings (
     updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
 );
 
-CREATE INDEX idx_benchmark_source ON benchmark_rankings(benchmark_source);
-CREATE INDEX idx_benchmark_year ON benchmark_rankings(year);
-CREATE INDEX idx_benchmark_institution_id ON benchmark_rankings(institution_id);
-CREATE INDEX idx_benchmark_rank ON benchmark_rankings(rank);
+CREATE INDEX IF NOT EXISTS idx_benchmark_source ON benchmark_rankings(benchmark_source);
+CREATE INDEX IF NOT EXISTS idx_benchmark_year ON benchmark_rankings(year);
+CREATE INDEX IF NOT EXISTS idx_benchmark_institution_id ON benchmark_rankings(institution_id);
+CREATE INDEX IF NOT EXISTS idx_benchmark_rank ON benchmark_rankings(rank);

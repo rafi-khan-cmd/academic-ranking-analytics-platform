@@ -7,6 +7,7 @@ import logging
 import sys
 from pathlib import Path
 from typing import Optional, List
+from datetime import datetime
 
 # Add project root to path
 sys.path.insert(0, str(Path(__file__).parent.parent))
@@ -31,6 +32,7 @@ from scripts.advanced_analytics import (
     compute_feature_importance, compute_institution_clusters,
     save_clusters_to_db, compute_sensitivity_analysis, save_sensitivity_to_db
 )
+from scripts.database import dispose_db_engine
 from scripts.config import (
     DEFAULT_YEAR, DEFAULT_YEARS_BACK, DEFAULT_INSTITUTION_COUNT,
     ENABLE_CROSSREF, ENABLE_SEMANTIC_SCHOLAR
@@ -123,26 +125,33 @@ def run_complete_pipeline(
         save_raw_data(topics, "topics_raw.json")
         
         # Phase 5: Fetch Works Data (Optional but recommended)
-        works_data_map = {}  # Use empty dict instead of None
+        # Now returns aggregated metrics instead of full works lists (TRUE streaming mode)
+        aggregated_metrics_map = {}
+        works_data_map = {}  # Legacy format, kept empty for compatibility
         if fetch_works:
             logger.info("\n[PHASE 5] Fetching works/publication data from OpenAlex API...")
+            logger.info("Using TRUE streaming aggregation mode (memory-efficient)...")
             logger.info("This may take 10-30 minutes depending on number of institutions...")
             log_api_ingestion("openalex", "work", "running")
             
             institution_ids = [inst.get("openalex_id") for inst in resolved if inst.get("openalex_id")]
             checkpoint_file = RAW_DATA_DIR / "works_checkpoint.json"
-            works_data_map = fetch_institution_works_batch(
+            
+            # Use MAX_WORKS_PER_INSTITUTION as default, not 200
+            from scripts.works_aggregator import MAX_WORKS_PER_INSTITUTION
+            aggregated_metrics_map = fetch_institution_works_batch(
                 institution_ids,
                 years_back=years_back,
-                limit_per_institution=1000,
+                limit_per_institution=MAX_WORKS_PER_INSTITUTION,  # Use full cap (5000), not 200
                 use_cache=not full_refresh,
                 checkpoint_file=checkpoint_file
             )
-            if works_data_map:
-                log_api_ingestion("openalex", "work", "completed", records_fetched=sum(len(w) for w in works_data_map.values()))
-                logger.info(f"✓ Fetched works data for {len(works_data_map)} institutions")
+            if aggregated_metrics_map:
+                total_works = sum(m.get("works_processed", 0) for m in aggregated_metrics_map.values())
+                log_api_ingestion("openalex", "work", "completed", records_fetched=total_works)
+                logger.info(f"✓ Aggregated works data for {len(aggregated_metrics_map)} institutions ({total_works:,} total works processed)")
             else:
-                works_data_map = {}  # Ensure it's a dict, not None
+                aggregated_metrics_map = {}  # Ensure it's a dict, not None
                 log_api_ingestion("openalex", "work", "failed", notes="No works data fetched")
                 logger.warning("⚠️ No works data fetched")
         else:
@@ -150,43 +159,28 @@ def run_complete_pipeline(
             logger.info("⚠️ No works data provided; using fallback indicator path")
         
         # Phase 6: Optional Enrichment
-        if fetch_works and works_data_map:
-            # Flatten works for enrichment
-            all_works = []
-            for works_list in works_data_map.values():
-                all_works.extend(works_list)
-            
-            if enable_crossref:
-                logger.info("\n[PHASE 6A] Enriching works with Crossref metadata...")
-                log_api_ingestion("crossref", "enrichment", "running")
-                all_works = enrich_crossref_batch(all_works, max_enrichments=1000)
-                log_api_ingestion("crossref", "enrichment", "completed", records_processed=len(all_works))
-                logger.info(f"✓ Crossref enrichment completed")
-            
-            if enable_semantic_scholar:
-                logger.info("\n[PHASE 6B] Enriching works with Semantic Scholar metadata...")
-                log_api_ingestion("semantic_scholar", "enrichment", "running")
-                all_works = enrich_s2_batch(all_works, max_enrichments=500)
-                log_api_ingestion("semantic_scholar", "enrichment", "completed", records_processed=len(all_works))
-                logger.info(f"✓ Semantic Scholar enrichment completed")
-            
-            # Reconstruct works_data_map from enriched works
-            # (This is simplified - in production, you'd maintain the mapping better)
-            if enable_crossref or enable_semantic_scholar:
-                # Reconstruct mapping (simplified approach)
-                enriched_map = {}
-                for work in all_works:
-                    # Extract institution from work (would need proper mapping)
-                    pass  # Placeholder - would need proper reconstruction logic
+        # NOTE: Enrichment requires full works objects, which we no longer store
+        # Enrichment is skipped in streaming mode to preserve memory efficiency
+        if fetch_works and aggregated_metrics_map and (enable_crossref or enable_semantic_scholar):
+            logger.warning("\n[PHASE 6] Enrichment skipped in streaming mode (requires full works objects)")
+            logger.info("To enable enrichment, use legacy works_data_map mode (not recommended for large datasets)")
         
         # Phase 7: Indicator Engineering
-        logger.info("\n[PHASE 7] Building indicators from works data...")
-        # Extract years from works data
-        years = None  # Will be auto-detected from works
+        logger.info("\n[PHASE 7] Building indicators from aggregated works metrics...")
+        
+        # Determine years range from years_back parameter
+        # This ensures we generate indicators for all years in the requested range,
+        # not just years that happen to have publications
+        current_year = datetime.now().year
+        start_year = current_year - years_back
+        years_range = list(range(start_year, current_year + 1))
+        logger.info(f"Building indicators for years range: {years_range} (years_back={years_back})")
+        
         indicators = build_indicators_from_resolved_entities(
             resolved,
-            works_data_map=works_data_map,
-            years=years
+            works_data_map=works_data_map,  # Empty in streaming mode
+            aggregated_metrics_map=aggregated_metrics_map,  # Use aggregated metrics
+            years=years_range  # Explicitly pass the requested year range
         )
         save_indicators(indicators)
         logger.info(f"✓ Built indicators for {len(indicators)} institution-year records")
@@ -211,10 +205,20 @@ def run_complete_pipeline(
         
         # Phase 10: Ranking Computation
         logger.info("\n[PHASE 10] Computing rankings for all methodologies...")
+        
+        # Extract current run's institution_ids for scoping
+        current_run_institution_ids = list(institution_map.values())
+        logger.info(f"Ranking scope: {len(current_run_institution_ids)} institution_ids from current pipeline run")
+        
         # Compute rankings for all years found in indicators
         years_in_data = sorted(set(ind.get("year") for ind in indicators))
         for year in years_in_data:
-            compute_all_methodology_rankings(year=year)
+            # Convert year to int if it's a string
+            year_int = int(year) if isinstance(year, str) else year
+            compute_all_methodology_rankings(
+                year=year_int,
+                institution_ids=current_run_institution_ids
+            )
         logger.info(f"✓ Rankings computed for years: {years_in_data}")
         
         # Phase 11: Advanced Analytics
@@ -222,22 +226,48 @@ def run_complete_pipeline(
         
         # Feature importance (for most recent year)
         latest_year = max(years_in_data) if years_in_data else DEFAULT_YEAR
-        logger.info("  - Computing feature importance...")
-        importance = compute_feature_importance(year=latest_year)
+        latest_year_int = int(latest_year) if isinstance(latest_year, str) else latest_year
+        
+        logger.info(f"  - Computing feature importance (year={latest_year_int})...")
+        logger.info(f"    Feature importance scope: {len(current_run_institution_ids)} institutions for year {latest_year_int}")
+        # Get shared engine for advanced analytics (reuse for all operations)
+        from scripts.database import get_db_engine_with_retry
+        analytics_engine = get_db_engine_with_retry()
+        
+        importance = compute_feature_importance(
+            year=latest_year_int,
+            institution_ids=current_run_institution_ids,
+            engine=analytics_engine  # Reuse same engine
+        )
         logger.info(f"    ✓ Feature importance computed: {len(importance)} indicators")
         
+        # Get shared engine for all advanced analytics operations
+        from scripts.database import get_db_engine_with_retry
+        analytics_engine = get_db_engine_with_retry()
+        
         # Clustering
-        logger.info("  - Computing institution clusters...")
-        clusters = compute_institution_clusters(n_clusters=4, year=latest_year)
+        logger.info(f"  - Computing institution clusters (year={latest_year_int})...")
+        logger.info(f"    Clustering scope: {len(current_run_institution_ids)} institutions for year {latest_year_int}")
+        clusters = compute_institution_clusters(
+            n_clusters=4,
+            year=latest_year_int,
+            institution_ids=current_run_institution_ids,
+            engine=analytics_engine  # Reuse same engine
+        )
         if clusters:
             save_clusters_to_db(clusters)
             logger.info(f"    ✓ Clustered {len(clusters)} institutions")
         
         # Sensitivity analysis
-        logger.info("  - Computing sensitivity analysis...")
-        sensitivity = compute_sensitivity_analysis(year=latest_year)
+        logger.info(f"  - Computing sensitivity analysis (year={latest_year_int})...")
+        logger.info(f"    Sensitivity scope: {len(current_run_institution_ids)} institutions for year {latest_year_int}")
+        sensitivity = compute_sensitivity_analysis(
+            year=latest_year_int,
+            institution_ids=current_run_institution_ids,
+            engine=analytics_engine  # Reuse same engine
+        )
         if sensitivity:
-            save_sensitivity_to_db(sensitivity, year=latest_year)
+            save_sensitivity_to_db(sensitivity, year=latest_year_int)
             logger.info(f"    ✓ Sensitivity computed for {len(sensitivity)} institutions")
         
         # Update pipeline log
@@ -272,6 +302,10 @@ def run_complete_pipeline(
             notes=f"Pipeline failed: {str(e)}"
         )
         raise
+    finally:
+        # Always dispose the shared database engine to release connections
+        logger.info("Disposing database engine and releasing connections...")
+        dispose_db_engine()
 
 
 if __name__ == "__main__":
