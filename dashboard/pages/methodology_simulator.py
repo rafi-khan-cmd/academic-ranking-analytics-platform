@@ -94,7 +94,7 @@ def render():
     
     # Weight validation
     if abs(total_weight - 1.0) > 0.01:
-        st.warning(f"⚠️ Weights sum to {total_weight:.2f}. Please adjust to sum to 1.0 for accurate rankings.")
+        st.warning(f"Weights sum to {total_weight:.2f}. Please adjust to sum to 1.0 for accurate rankings.")
         normalize = st.checkbox("Normalize weights automatically", value=False)
         if normalize:
             total = total_weight
@@ -106,7 +106,7 @@ def render():
             prod_weight = prod_weight / total
             st.success(f"Weights normalized. New total: {pub_weight + cite_weight + collab_weight + quality_weight + subject_weight + prod_weight:.2f}")
     else:
-        st.success(f"✓ Weights sum to {total_weight:.2f}")
+        st.success(f"Weights sum to {total_weight:.2f}")
     
     # Custom weights dictionary
     custom_weights = {

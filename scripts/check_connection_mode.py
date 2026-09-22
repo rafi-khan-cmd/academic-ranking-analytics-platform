@@ -43,23 +43,23 @@ def check_connection_mode():
         print()
         
         if mode == "MIXED (ERROR)":
-            print("❌ ERROR: Connection mode mismatch detected!")
+            print("ERROR: Connection mode mismatch detected!")
             if is_pooler_host_val and not is_pooler_user_val:
                 print("   Pooler host requires pooler-style user (e.g., 'postgres.PROJECT_ID')")
             elif not is_pooler_host_val and is_pooler_user_val:
                 print("   Direct host requires direct-style user ('postgres')")
             return False
         elif mode == "session_pooler":
-            print("✅ Using session pooler connection")
+            print("Using session pooler connection")
             print("   This is the recommended mode for Streamlit Cloud")
         elif mode == "direct":
-            print("✅ Using direct connection")
+            print("Using direct connection")
             print("   Note: Direct connection may require IP whitelisting")
         
         return True
         
     except Exception as e:
-        print(f"❌ Error checking connection mode: {e}")
+        print(f"Error checking connection mode: {e}")
         return False
 
 

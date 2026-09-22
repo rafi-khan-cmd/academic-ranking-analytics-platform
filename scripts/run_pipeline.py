@@ -102,26 +102,26 @@ def run_complete_pipeline(
             use_cache=not full_refresh
         )
         log_api_ingestion("openalex", "institution", "completed", records_fetched=len(institutions))
-        logger.info(f"✓ Extracted {len(institutions)} institutions")
+        logger.info(f"Extracted {len(institutions)} institutions")
         
         # Phase 2: Data Cleaning
         logger.info("\n[PHASE 2] Cleaning institution data...")
         from scripts.clean_data import clean_institution_data
         cleaned_institutions = clean_institution_data(institutions)
-        logger.info(f"✓ Cleaned {len(cleaned_institutions)} institution records")
+        logger.info(f"Cleaned {len(cleaned_institutions)} institution records")
         
         # Phase 3: Entity Resolution (with ROR API)
         logger.info("\n[PHASE 3] Resolving entity names with ROR API...")
         resolved = resolve_institution_entities(cleaned_institutions)
         save_resolved_entities(resolved)
-        logger.info(f"✓ Resolved {len(resolved)} entities")
+        logger.info(f"Resolved {len(resolved)} entities")
         
         # Phase 4: Topics Extraction
         logger.info("\n[PHASE 4] Extracting topics from OpenAlex API...")
         log_api_ingestion("openalex", "topic", "running")
         topics = fetch_topics(max_results=1000, use_cache=not full_refresh)
         log_api_ingestion("openalex", "topic", "completed", records_fetched=len(topics))
-        logger.info(f"✓ Extracted {len(topics)} topics")
+        logger.info(f"Extracted {len(topics)} topics")
         save_raw_data(topics, "topics_raw.json")
         
         # Phase 5: Fetch Works Data (Optional but recommended)
@@ -149,14 +149,14 @@ def run_complete_pipeline(
             if aggregated_metrics_map:
                 total_works = sum(m.get("works_processed", 0) for m in aggregated_metrics_map.values())
                 log_api_ingestion("openalex", "work", "completed", records_fetched=total_works)
-                logger.info(f"✓ Aggregated works data for {len(aggregated_metrics_map)} institutions ({total_works:,} total works processed)")
+                logger.info(f"Aggregated works data for {len(aggregated_metrics_map)} institutions ({total_works:,} total works processed)")
             else:
                 aggregated_metrics_map = {}  # Ensure it's a dict, not None
                 log_api_ingestion("openalex", "work", "failed", notes="No works data fetched")
-                logger.warning("⚠️ No works data fetched")
+                logger.warning("No works data fetched")
         else:
             logger.info("\n[PHASE 5] Skipping works data fetch (use fetch_works=True for full data)")
-            logger.info("⚠️ No works data provided; using fallback indicator path")
+            logger.info("No works data provided; using fallback indicator path")
         
         # Phase 6: Optional Enrichment
         # NOTE: Enrichment requires full works objects, which we no longer store
@@ -183,13 +183,13 @@ def run_complete_pipeline(
             years=years_range  # Explicitly pass the requested year range
         )
         save_indicators(indicators)
-        logger.info(f"✓ Built indicators for {len(indicators)} institution-year records")
+        logger.info(f"Built indicators for {len(indicators)} institution-year records")
         
         # Phase 8: Normalization
         logger.info("\n[PHASE 8] Normalizing metrics...")
         normalized = normalize_indicators(indicators)
         save_normalized_metrics(normalized)
-        logger.info(f"✓ Normalized {len(normalized)} metric records")
+        logger.info(f"Normalized {len(normalized)} metric records")
         
         # Phase 9: Database Loading
         logger.info("\n[PHASE 9] Loading data to PostgreSQL...")
@@ -201,7 +201,7 @@ def run_complete_pipeline(
         load_methodology_weights()
         load_raw_metrics(indicators, institution_map)
         load_normalized_metrics(normalized, institution_map)
-        logger.info("✓ Data loaded to database")
+        logger.info("Data loaded to database")
         
         # Phase 10: Ranking Computation
         logger.info("\n[PHASE 10] Computing rankings for all methodologies...")
@@ -219,7 +219,7 @@ def run_complete_pipeline(
                 year=year_int,
                 institution_ids=current_run_institution_ids
             )
-        logger.info(f"✓ Rankings computed for years: {years_in_data}")
+        logger.info(f"Rankings computed for years: {years_in_data}")
         
         # Phase 11: Advanced Analytics
         logger.info("\n[PHASE 11] Running advanced analytics...")
@@ -239,7 +239,7 @@ def run_complete_pipeline(
             institution_ids=current_run_institution_ids,
             engine=analytics_engine  # Reuse same engine
         )
-        logger.info(f"    ✓ Feature importance computed: {len(importance)} indicators")
+        logger.info(f"    Feature importance computed: {len(importance)} indicators")
         
         # Get shared engine for all advanced analytics operations
         from scripts.database import get_db_engine_with_retry
@@ -256,7 +256,7 @@ def run_complete_pipeline(
         )
         if clusters:
             save_clusters_to_db(clusters)
-            logger.info(f"    ✓ Clustered {len(clusters)} institutions")
+            logger.info(f"    Clustered {len(clusters)} institutions")
         
         # Sensitivity analysis
         logger.info(f"  - Computing sensitivity analysis (year={latest_year_int})...")
@@ -268,7 +268,7 @@ def run_complete_pipeline(
         )
         if sensitivity:
             save_sensitivity_to_db(sensitivity, year=latest_year_int)
-            logger.info(f"    ✓ Sensitivity computed for {len(sensitivity)} institutions")
+            logger.info(f"    Sensitivity computed for {len(sensitivity)} institutions")
         
         # Update pipeline log
         log_api_ingestion(
@@ -283,11 +283,11 @@ def run_complete_pipeline(
         logger.info("\n" + "=" * 70)
         logger.info("PIPELINE COMPLETE!")
         logger.info("=" * 70)
-        logger.info(f"✓ {len(resolved)} institutions processed")
-        logger.info(f"✓ {len(topics)} topics extracted")
-        logger.info(f"✓ {len(indicators)} indicator records computed")
-        logger.info(f"✓ Rankings computed for years: {years_in_data}")
-        logger.info(f"✓ Advanced analytics completed")
+        logger.info(f"{len(resolved)} institutions processed")
+        logger.info(f"{len(topics)} topics extracted")
+        logger.info(f"{len(indicators)} indicator records computed")
+        logger.info(f"Rankings computed for years: {years_in_data}")
+        logger.info(f"Advanced analytics completed")
         logger.info("\nNext steps:")
         logger.info("1. Start dashboard: streamlit run dashboard/app.py")
         logger.info("2. View results in PostgreSQL database")

@@ -60,7 +60,7 @@ st.markdown('<p class="subtitle">A Python, PostgreSQL, and Streamlit analytics p
 
 # Database status warning
 if not db_available:
-    st.warning(f"⚠️ {db_message}")
+    st.warning(f"{db_message}")
     st.info("""
     **To get started:**
     1. Set up a PostgreSQL database (local or cloud)

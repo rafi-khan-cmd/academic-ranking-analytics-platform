@@ -36,7 +36,7 @@ def check_database_available():
         error_lower = conn_message.lower()
         if "connection refused" in error_lower or "could not connect" in error_lower:
             return False, (
-                f"⚠️ Connection refused.\n\n"
+                f"Connection refused.\n\n"
                 f"**Current config:**\n"
                 f"- Host: {DB_CONFIG.get('host', 'NOT SET')}\n"
                 f"- Port: {DB_CONFIG.get('port', 'NOT SET')}\n"
@@ -50,13 +50,13 @@ def check_database_available():
             )
         elif "authentication" in error_lower or "password" in error_lower:
             return False, (
-                f"⚠️ Authentication failed.\n\n"
+                f"Authentication failed.\n\n"
                 f"**Check:**\n"
                 f"- Password in Streamlit secrets matches Supabase\n"
                 f"- User includes project ID: `postgres.peawexmwwmkqszcdqwjv`\n"
                 f"- No extra spaces or quotes in secrets"
             )
-        return False, f"⚠️ {conn_message}"
+        return False, f"{conn_message}"
     
     # Query for data
     try:
@@ -66,7 +66,7 @@ def check_database_available():
             count = result.fetchone()[0]
             if count == 0:
                 return False, "Database is empty. Run: python scripts/create_sample_data.py && python scripts/load_to_postgres.py"
-            return True, f"✅ Database connected with {count} institutions."
+            return True, f"Database connected with {count} institutions."
     except Exception as query_error:
         error_msg = str(query_error).lower()
         if "does not exist" in error_msg or "relation" in error_msg:

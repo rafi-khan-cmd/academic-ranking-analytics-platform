@@ -1,622 +1,153 @@
 # Academic Rankings Intelligence Platform
 
-**A Python, PostgreSQL, and Streamlit analytics platform for modeling, simulating, and explaining global university ranking methodologies across institutions, countries, and academic subjects.**
+An analytics platform that reconstructs and stress-tests global university ranking methodologies from raw research indicators. It pulls institution and publication data from the OpenAlex API, resolves institutions to canonical entities, engineers normalized indicators, and lets you see how different weighting choices reshuffle the rankings. Everything is backed by a PostgreSQL analytics schema and surfaced through a Streamlit dashboard.
 
-[![Python](https://img.shields.io/badge/Python-3.8+-blue.svg)](https://www.python.org/)
-[![PostgreSQL](https://img.shields.io/badge/PostgreSQL-12+-blue.svg)](https://www.postgresql.org/)
-[![Streamlit](https://img.shields.io/badge/Streamlit-1.28+-red.svg)](https://streamlit.io/)
-[![License](https://img.shields.io/badge/License-MIT-green.svg)](LICENSE)
+The idea started from a simple observation: rankings like ARWU, QS, and THE all measure "research quality," yet they disagree, because they weight indicators differently. This project makes those trade-offs explicit and lets you explore them interactively.
 
-## 🎯 Project Overview
+## What it does
 
-The Academic Rankings Intelligence Platform is a comprehensive analytics system that helps users understand how academic rankings can be constructed from measurable research indicators, how different weighting choices affect ranking outcomes, and how institutions compare across methodologies, countries, and academic subjects.
+- Ingests institutions, works, topics, and citation data from the [OpenAlex API](https://openalex.org/)
+- Resolves institution names to canonical entities using the [ROR API](https://ror.org/) plus fuzzy matching for the long tail
+- Engineers six research indicators (publication, citation, collaboration, quality, subject strength, productivity) and normalizes them with min-max scaling
+- Applies five configurable weighting methodologies and recomputes rankings for each
+- Runs feature-importance, KMeans clustering, and weight-sensitivity analysis on top of the rankings
+- Serves a seven-page Streamlit dashboard for exploring institutions, methodologies, and clusters
 
-This project demonstrates deep understanding of:
-- **Ranking Analytics**: Methodology design, indicator engineering, and normalization
-- **Python Data Engineering**: End-to-end data pipelines, entity resolution, and data transformation
-- **SQL Analytics**: Complex queries, views, and analytical database design
-- **Dashboard Development**: Interactive visualizations and stakeholder-friendly interfaces
-- **Advanced Analytics**: Feature importance, clustering, and sensitivity analysis
+## Stack
 
-## 🚀 Why This Project Matters
+- **Python** (pandas, numpy) for the data pipeline
+- **PostgreSQL** with SQLAlchemy and psycopg2 for the analytics database
+- **scikit-learn** for clustering and feature importance, **statsmodels** for statistical checks
+- **rapidfuzz** and **pycountry** for entity resolution and country normalization
+- **Streamlit** and **Plotly** for the dashboard
 
-Academic rankings influence institutional reputation, funding decisions, and student choices. However, ranking methodologies vary significantly, and small changes in indicator weights can dramatically alter outcomes. This platform provides transparency into ranking construction, enables methodology exploration, and reveals how different weighting schemes favor different institutional profiles.
+Optional enrichment layers use the Crossref and Semantic Scholar APIs.
 
-**Key Value Propositions:**
-- **Methodology Transparency**: Understand how indicator weights drive ranking outcomes
-- **Institutional Insights**: Compare institutions across multiple ranking approaches
-- **Sensitivity Analysis**: Identify which institutions are most affected by methodology changes
-- **Research Profile Discovery**: Cluster institutions into distinct research archetypes
-
-## 🎓 Role Alignment
-
-This project directly aligns with analytics and dashboard development roles, particularly:
-
-- **Data-Driven Decision Analytics**: Demonstrates ability to translate ambiguous methodology into measurable indicators
-- **Python-Based Data Engineering**: End-to-end pipeline from raw data to analytical insights
-- **SQL-Backed Analytics**: Complex database design and query optimization
-- **Dashboard Development**: Professional, interactive analytics interfaces
-- **Methodology Interpretation**: Ability to explain and simulate ranking logic
-
-## 🏗️ Architecture
-
-### High-Level Pipeline
+## Pipeline
 
 ```
-External Data Sources (OpenAlex API)
-    ↓
-Data Ingestion (extract_data.py)
-    ↓
-Entity Resolution (resolve_entities.py)
-    ↓
-Indicator Engineering (build_indicators.py)
-    ↓
-Normalization (normalize_metrics.py)
-    ↓
-Ranking Methodology Engine (ranking_engine.py)
-    ↓
-PostgreSQL Analytics Database
-    ↓
-Streamlit Dashboard
-    ↓
-Public Deployment
+OpenAlex API  →  extract  →  clean  →  resolve entities (ROR)
+             →  build indicators  →  normalize  →  load to PostgreSQL
+             →  compute rankings  →  advanced analytics  →  Streamlit dashboard
 ```
 
-### Technology Stack
+## Indicators and methodologies
 
-**Core:**
-- Python 3.8+
-- pandas & numpy for data processing
-- SQLAlchemy & psycopg2 for database operations
-- PostgreSQL for analytical database
-- Streamlit for interactive dashboard
-- Plotly for visualizations
+Six indicators feed the ranking engine:
 
-**Analytics:**
-- scikit-learn for machine learning (clustering, feature importance)
-- statsmodels for statistical analysis
-- rapidfuzz for entity resolution
+| Indicator | Meaning |
+|-----------|---------|
+| Publication score | Normalized publication count |
+| Citation score | Normalized total citations |
+| Collaboration score | International collaboration rate |
+| Quality score | High-impact research proxy (top-percentile citations) |
+| Subject strength score | Subject-specific excellence |
+| Productivity score | Impact per publication |
 
-**Data Sources:**
-- OpenAlex API for institution and publication data
-- Public ranking tables for benchmarking
+Five weighting profiles are defined in `scripts/config.py`:
 
-## 📊 Data Sources
+1. **Balanced** – equal weight across indicators
+2. **Research Impact** – 35% citation, 25% quality
+3. **Publication Volume** – 40% publication
+4. **Collaboration-Forward** – 40% collaboration
+5. **Subject Excellence** – 25% subject strength
 
-> **⚠️ IMPORTANT: Production Pipeline is Default**
-> 
-> This platform uses **real-time OpenAlex API** as the primary data source by default.
-> - **Default:** 200 institutions from OpenAlex API (configurable)
-> - **Sample data:** Optional demo data only (40 institutions) - NOT the default path
-> - **To use real data:** Run `python scripts/run_pipeline.py` (no sample data needed)
+The methodology simulator lets you drag the weights yourself and watch the rankings move.
 
-### Primary Data Source: OpenAlex API (Real-Time)
+## Database
 
-The platform uses **real-time API calls** to the [OpenAlex API](https://openalex.org/) as the primary data source. OpenAlex provides comprehensive academic data including institutions, works (publications), topics, authors, and sources.
+The schema (`sql/schema.sql`) defines 16 tables covering institutions and entity resolution, works and topics, raw and normalized metrics, methodology weights and ranking results, clustering and sensitivity outputs, country summaries, ingestion logging, and external benchmark rankings. Eight analytical views (`sql/views.sql`) sit on top for the dashboard. Field-level descriptions are in `docs/data_dictionary.md`.
 
-**API Endpoints Used:**
-- `/institutions` - Institution discovery and metadata (works_count, cited_by_count, type, country)
-- `/works` - Publication and citation data (publication_year, cited_by_count, DOI, topics, authorships)
-- `/topics` - Subject/topic classifications (preferred over deprecated concepts)
-- `/authors` - Author metadata (optional)
-- `/sources` - Journal/venue metadata (optional)
+## Dashboard pages
 
-**OpenAlex API Configuration:**
-- API keys are **required** and free from [OpenAlex](https://openalex.org/)
-- Set `OPENALEX_API_KEY` in environment variables or `.env` file
-- Set `OPENALEX_EMAIL` for polite API usage (recommended)
-- The pipeline includes automatic retry/backoff, caching, and checkpointing
+1. **Executive Overview** – top institutions, country summaries, KPI cards
+2. **Global Rankings** – sortable tables with methodology/country/year filters
+3. **Institution Explorer** – per-institution profiles and indicator radar charts
+4. **Methodology Simulator** – live weight adjustment and rank-movement analysis
+5. **Subject Rankings** – subject-specific rankings where data allows
+6. **Indicator Analytics** – correlation heatmaps, feature importance, distributions
+7. **Research Clusters** – KMeans institution clusters and their profiles
 
-**Key Features:**
-- Configurable institution count (default: 200)
-- Year-window filtering (default: last 5 years)
-- Pagination and rate limiting
-- Caching for reproducibility
-- Checkpointing for resumable ingestion
-
-### Secondary Data Source: ROR API (Entity Resolution)
-
-The platform integrates with the [ROR API](https://ror.org/) for:
-- Institution name standardization and canonical name resolution
-- Entity disambiguation (e.g., MIT vs Massachusetts Institute of Technology)
-- Enhanced metadata validation
-- Confidence scoring for resolution matches
-
-**ROR Integration:**
-- Automatic ROR ID lookup from OpenAlex data
-- ROR search API for institutions without ROR IDs
-- Match method tracking (exact_ror, ror_search, fuzzy_mapping, etc.)
-- Confidence scores (0-100) for all resolutions
-
-### Optional Enrichment: Crossref API
-
-**Crossref enrichment** is an optional layer that enriches works with DOI-based metadata:
-- Journal/container title
-- Publisher information
-- Publication dates
-- Funder metadata
-- Subject classifications
-
-**Configuration:**
-- Set `CROSSREF_MAILTO` in environment variables (required for polite API usage)
-- Enable with `--enable-crossref` flag or `ENABLE_CROSSREF=true`
-- Respects Crossref rate limits automatically
-
-### Optional Enrichment: Semantic Scholar API
-
-**Semantic Scholar enrichment** provides influence and citation metrics:
-- `influentialCitationCount` - Highly cited papers
-- Enhanced citation counts
-- Author influence proxies
-- Citation network data
-
-**Configuration:**
-- Set `SEMANTIC_SCHOLAR_API_KEY` in environment variables (optional, free tier available)
-- Enable with `--enable-semantic-scholar` flag or `ENABLE_SEMANTIC_SCHOLAR=true`
-- Free tier has rate limits (100 requests/day)
-
-**Why Real-Time APIs?**
-- Always up-to-date data
-- No manual dataset maintenance
-- Scalable to any number of institutions
-- Production-ready data pipeline
-- Optional enrichment layers for enhanced insights
-
-### Entity Resolution
-
-Institution names are standardized using:
-- **Canonical Name Mappings**: Pre-defined mappings for major institutions (MIT, Harvard, etc.)
-- **Fuzzy Matching**: RapidFuzz for approximate string matching
-- **Country Normalization**: pycountry for consistent country names
-
-## 🔧 Indicator Engineering
-
-The platform computes six core ranking indicators:
-
-1. **Publication Score**: Normalized total publication count
-2. **Citation Score**: Normalized total citation count
-3. **Collaboration Score**: International collaboration rate
-4. **Quality Score**: High-impact research proxy (top percentile citations)
-5. **Subject Strength Score**: Subject-specific excellence metric
-6. **Productivity Score**: Impact per publication efficiency metric
-
-All indicators are normalized using **min-max scaling** to ensure fair comparison across institutions.
-
-## 📈 Ranking Methodologies
-
-The platform implements five distinct methodology profiles:
-
-1. **Balanced Model**: Equal weighting across all indicators
-2. **Research Impact Model**: Emphasizes citations and quality (35% citation, 25% quality)
-3. **Publication Volume Model**: Prioritizes publication output (40% publication)
-4. **Collaboration-Forward Model**: Emphasizes international collaboration (40% collaboration)
-5. **Subject Excellence Model**: Prioritizes subject-specific strength (25% subject strength)
-
-Each methodology is stored in the database and can be selected in the dashboard.
-
-## 🎮 Methodology Simulator
-
-The interactive simulator allows users to:
-- Adjust indicator weights with real-time sliders
-- Recalculate rankings instantly
-- Compare before/after rankings
-- Identify biggest winners and losers
-- Filter by country and subject
-
-This feature demonstrates the platform's core value: **transparency into how methodology choices affect outcomes**.
-
-## 📱 Dashboard Pages
-
-### 1. Executive Overview
-- Top institutions across methodologies
-- Country-level performance summaries
-- KPI cards and key insights
-- Methodology profile comparison
-
-### 2. Global Rankings
-- Sortable ranking tables
-- Filters for methodology, country, year
-- Score distributions and quartiles
-- Methodology comparison tools
-
-### 3. Institution Explorer
-- Detailed institution profiles
-- Indicator radar charts
-- Rankings across methodologies
-- Raw vs normalized metrics
-
-### 4. Methodology Simulator
-- Dynamic weight adjustment
-- Live ranking recalculation
-- Rank movement analysis
-- Before/after comparisons
-
-### 5. Subject Rankings
-- Subject-specific rankings (when data available)
-- Subject strength analysis
-- Comparison with overall rankings
-
-### 6. Indicator Analytics
-- Correlation heatmaps
-- Feature importance analysis
-- Scatter plots and distributions
-- Summary statistics
-
-### 7. Research Clusters
-- Institution clustering (KMeans)
-- Cluster profiles and descriptions
-- Country-level cluster distribution
-- Institution cluster lookup
-
-## 🔬 Advanced Analytics
-
-### Feature Importance Analysis
-Uses Random Forest regression to identify which indicators are most predictive of overall ranking scores. Reveals which factors drive ranking outcomes.
-
-### Sensitivity/Volatility Analysis
-Measures how much institutions move under different methodology assumptions. Identifies institutions that are:
-- **Stable**: Rank consistently across methodologies
-- **Volatile**: Rank changes significantly with methodology shifts
-
-### Institution Clustering
-Groups institutions into distinct research profiles:
-- **High-Impact Elite**: Exceptional citation impact
-- **High-Volume Output**: Large publication volume
-- **Collaboration-Driven**: Strong international partnerships
-- **Subject Specialist**: Subject-specific excellence
-
-## 💾 Database Schema
-
-The PostgreSQL database includes:
-
-**Core Tables:**
-- **institutions**: Institution metadata and canonical names
-- **institution_resolution**: ROR entity resolution tracking with confidence scores
-- **topics**: OpenAlex topics/subjects (preferred over deprecated concepts)
-- **works**: Publication-level data from OpenAlex
-- **work_topics**: Many-to-many relationship between works and topics
-- **institution_works**: Many-to-many relationship between institutions and works
-
-**Metrics & Rankings:**
-- **raw_metrics**: Unnormalized indicator values (institution-year and institution-subject-year)
-- **normalized_metrics**: Normalized indicator scores
-- **methodology_weights**: Methodology weight definitions
-- **ranking_results**: Computed rankings by methodology
-
-**Analytics:**
-- **institution_clusters**: Cluster assignments
-- **sensitivity_results**: Volatility analysis results
-- **country_summary**: Country-level aggregations
-
-**Operational:**
-- **api_ingestion_log**: Tracks all API ingestion runs
-- **benchmark_rankings**: External ranking tables (ARWU, QS, THE, etc.)
-
-See `sql/schema.sql` for complete schema definition and `docs/data_dictionary.md` for detailed field descriptions.
-
-## 🚀 Getting Started
+## Getting started
 
 ### Prerequisites
 
 - Python 3.8+
 - PostgreSQL 12+
-- pip or conda
 
-### Installation
+### Setup
 
-1. **Clone the repository:**
 ```bash
-git clone https://github.com/yourusername/academic-ranking-analytics-platform.git
+git clone https://github.com/rafi-khan-cmd/academic-ranking-analytics-platform.git
 cd academic-ranking-analytics-platform
-```
 
-2. **Create virtual environment:**
-```bash
 python -m venv venv
-source venv/bin/activate  # On Windows: venv\Scripts\activate
-```
-
-3. **Install dependencies:**
-```bash
+source venv/bin/activate        # Windows: venv\Scripts\activate
 pip install -r requirements.txt
+
+cp .env.example .env            # then fill in your database + API details
 ```
 
-4. **Configure environment variables:**
-Create a `.env` file in the project root:
+Load the schema and views:
+
 ```bash
-# Required: Database configuration
-POSTGRES_HOST=your-supabase-host
-POSTGRES_PORT=5432
-POSTGRES_DB=postgres
-POSTGRES_USER=your-user
-POSTGRES_PASSWORD=your-password
-
-# Required: OpenAlex API
-OPENALEX_API_KEY=your-openalex-api-key
-OPENALEX_EMAIL=your-email@example.com
-
-# Optional: Crossref enrichment
-CROSSREF_MAILTO=your-email@example.com
-
-# Optional: Semantic Scholar enrichment
-SEMANTIC_SCHOLAR_API_KEY=your-s2-api-key
-
-# Optional: Pipeline configuration
-DEFAULT_INSTITUTION_COUNT=200
-DEFAULT_YEARS_BACK=5
-ENABLE_CROSSREF=false
-ENABLE_SEMANTIC_SCHOLAR=false
+psql -h "$POSTGRES_HOST" -U "$POSTGRES_USER" -d "$POSTGRES_DB" -f sql/schema.sql
+psql -h "$POSTGRES_HOST" -U "$POSTGRES_USER" -d "$POSTGRES_DB" -f sql/views.sql
 ```
 
-5. **Set up PostgreSQL database:**
-```bash
-# Run schema and views
-psql -h your-host -U your-user -d postgres -f sql/schema.sql
-psql -h your-host -U your-user -d postgres -f sql/views.sql
-```
+### Running the pipeline
 
-6. **Run the production data pipeline (REQUIRED for real data):**
-```bash
-# ⚠️ IMPORTANT: Sample data is NOT the default path
-# The production pipeline fetches real data from OpenAlex API
-
-# Basic run (200 institutions from OpenAlex API, last 5 years)
-python scripts/run_pipeline.py
-
-# Custom configuration
-python scripts/run_pipeline.py --institutions 300 --years-back 10
-
-# With optional enrichments
-python scripts/run_pipeline.py --enable-crossref --enable-semantic-scholar
-
-# Filter by countries
-python scripts/run_pipeline.py --countries US CA GB
-
-# Full refresh (clear cache)
-python scripts/run_pipeline.py --full-refresh
-```
-
-**Pipeline Phases:**
-1. Extract institutions from OpenAlex API
-2. Clean and standardize institution data
-3. Resolve entities with ROR API
-4. Extract topics from OpenAlex
-5. Fetch works/publications (optional but recommended)
-6. Enrich with Crossref (optional)
-7. Enrich with Semantic Scholar (optional)
-8. Build indicators from work-level data
-9. Normalize metrics
-10. Load to PostgreSQL database
-11. Compute rankings
-12. Run advanced analytics
-
-7. **Start the dashboard:**
-```bash
-pip install -r requirements.txt
-```
-
-4. **Set up PostgreSQL database:**
-```bash
-# Create database
-createdb academic_rankings
-
-# Load schema
-psql -d academic_rankings -f sql/schema.sql
-psql -d academic_rankings -f sql/views.sql
-```
-
-5. **Configure environment variables:**
-```bash
-cp .env.example .env
-# Edit .env with your database credentials and OpenAlex email
-```
-
-### Running the Data Pipeline
-
-**Option 1: Run Complete Pipeline (Recommended)**
-
-Run the entire pipeline with one command:
+The full pipeline fetches live data from OpenAlex and ROR, so you need an internet connection and an email set in `OPENALEX_EMAIL` for polite API usage.
 
 ```bash
-# Full pipeline with works data (takes 15-30 minutes)
+# Full run: 200 institutions, last 5 years (15-30 min with works data)
 python scripts/run_pipeline.py --institutions 200
 
-# Faster: Skip works data (uses summary stats only)
+# Faster run without work-level data
 python scripts/run_pipeline.py --institutions 200 --no-works
 
-# Custom year
-python scripts/run_pipeline.py --institutions 200 --year 2023
+# Optional enrichment layers
+python scripts/run_pipeline.py --enable-crossref --enable-semantic-scholar
 ```
 
-**Option 2: Run Steps Individually**
+You can also run the steps individually (`extract_data.py`, `clean_data.py`, `resolve_entities.py`, `build_indicators.py`, `normalize_metrics.py`, `load_to_postgres.py`, `ranking_engine.py`, `advanced_analytics.py`).
 
-For more control, run each step:
+If you just want to click around the dashboard without hitting the APIs, `scripts/create_sample_data.py` loads 40 synthetic institutions for demo purposes.
 
-1. **Extract institutions from OpenAlex API:**
-```bash
-python scripts/extract_data.py
-```
-
-2. **Clean data:**
-```bash
-python scripts/clean_data.py
-```
-
-3. **Resolve entities with ROR API:**
-```bash
-python scripts/resolve_entities.py
-```
-
-4. **Build indicators (requires works data):**
-```bash
-python scripts/build_indicators.py
-```
-
-5. **Normalize metrics:**
-```bash
-python scripts/normalize_metrics.py
-```
-
-6. **Load to database:**
-```bash
-python scripts/load_to_postgres.py
-```
-
-7. **Compute rankings:**
-```bash
-python scripts/ranking_engine.py
-```
-
-8. **Run advanced analytics:**
-```bash
-python scripts/advanced_analytics.py
-```
-
-**Note:** The pipeline fetches real-time data from OpenAlex and ROR APIs. Ensure you have internet connectivity and optionally set `OPENALEX_EMAIL` in `.env` for better rate limits.
-
-**⚠️ Sample Data is Optional Only:**
-- The `create_sample_data.py` script exists for demo/testing purposes only
-- It creates 40 synthetic institutions for quick testing
-- **The production pipeline uses real OpenAlex API data by default (200+ institutions)**
-- Sample data is NOT the default path - use `python scripts/run_pipeline.py` for real data
-
-### Running the Dashboard
+### Running the dashboard
 
 ```bash
 streamlit run dashboard/app.py
 ```
 
-The dashboard will be available at `http://localhost:8501`
+The dashboard runs at `http://localhost:8501`. `streamlit_app.py` is the Streamlit Cloud entrypoint and validates the database connection before launching.
 
-## 📁 Repository Structure
+## Repository layout
 
 ```
-academic-ranking-analytics-platform/
-├── data/
-│   ├── raw/              # Raw data from APIs
-│   ├── processed/         # Processed and cleaned data
-│   └── external/          # External reference data
-├── notebooks/            # Jupyter notebooks for exploration
-│   ├── 01_data_exploration.ipynb
-│   ├── 02_entity_resolution.ipynb
-│   ├── 03_indicator_engineering.ipynb
-│   ├── 04_methodology_analysis.ipynb
-│   └── 05_advanced_analytics.ipynb
-├── scripts/               # Python scripts for data pipeline
-│   ├── config.py          # Configuration and constants
-│   ├── database.py        # Database utilities
-│   ├── extract_data.py    # Data extraction
-│   ├── resolve_entities.py # Entity resolution
-│   ├── build_indicators.py # Indicator engineering
-│   ├── normalize_metrics.py # Normalization
-│   ├── load_to_postgres.py  # Database loading
-│   ├── ranking_engine.py    # Ranking computation
-│   ├── ranking_simulator.py # Dynamic simulation
-│   └── advanced_analytics.py # ML and advanced analysis
-├── sql/                   # SQL scripts
-│   ├── schema.sql         # Database schema
-│   ├── views.sql          # Analytical views
-│   └── analytical_queries.sql # Example queries
-├── dashboard/             # Streamlit dashboard
-│   ├── app.py            # Main application
-│   ├── pages/            # Dashboard pages
-│   │   ├── executive_overview.py
-│   │   ├── global_rankings.py
-│   │   ├── institution_explorer.py
-│   │   ├── methodology_simulator.py
-│   │   ├── subject_rankings.py
-│   │   ├── indicator_analytics.py
-│   │   └── research_clusters.py
-│   └── utils/            # Dashboard utilities
-│       └── db_utils.py   # Database query functions
-├── visuals/              # Screenshots and diagrams
-│   ├── screenshots/
-│   ├── diagrams/
-│   └── gifs/
-├── docs/                 # Documentation
-│   ├── architecture.md
-│   ├── methodology.md
-│   └── data_dictionary.md
-├── requirements.txt      # Python dependencies
-├── .gitignore
-└── README.md
+scripts/        data pipeline (extract, clean, resolve, indicators, rankings, analytics)
+sql/            schema.sql, views.sql, analytical_queries.sql
+dashboard/      Streamlit app and the seven pages
+docs/           architecture, methodology, data dictionary, API + deployment notes
+notebooks/      01_data_exploration.ipynb
 ```
 
-## 🔍 Key Insights
+## A few things I found
 
-The platform reveals several important patterns:
+- Citation-weighted methodologies reward high-impact institutions even when their publication volume is lower.
+- Publication-weighted methodologies reward scale, favoring large research universities.
+- Mid-tier institutions move around far more between methodologies than top-tier ones, which stay put.
+- Subject-level strength often diverges from overall institutional strength.
 
-1. **Citation-Heavy Methodologies** favor institutions with high-impact research, even if publication volume is lower.
+## Notes on methodology
 
-2. **Publication-Heavy Methodologies** reward scale over efficiency, benefiting large research universities.
+This platform uses ranking-inspired approximations built on publicly available data. It does not claim to replicate proprietary methodologies (ShanghaiRanking, QS, THE) exactly. The goal is transparency into how weighting choices drive outcomes, using documented indicators and open data.
 
-3. **Subject-Level Excellence** differs significantly from overall institutional strength. Some institutions excel in specific domains.
+## License
 
-4. **Mid-Tier Institutions** are more sensitive to methodology changes than top-tier institutions, which rank consistently across methodologies.
+MIT — see [LICENSE](LICENSE).
 
-5. **Collaboration-Forward Models** elevate globally connected institutions with strong international partnerships.
+## Author
 
-## 🌐 Live Demo
-
-[Link to deployed Streamlit app will be added here]
-
-## 📸 Screenshots
-
-### Executive Overview
-![Executive Overview](visuals/screenshots/executive_overview.png)
-
-### Methodology Simulator
-![Methodology Simulator](visuals/screenshots/methodology_simulator.png)
-
-### Institution Explorer
-![Institution Explorer](visuals/screenshots/institution_explorer.png)
-
-*Note: Screenshots will be added after deployment*
-
-## 🔮 Future Improvements
-
-- **Real-Time Data Updates**: Automated data refresh from OpenAlex API
-- **Subject-Level Analysis**: Full subject-specific ranking implementation
-- **Time-Series Analysis**: Multi-year trend analysis and ranking stability
-- **Export Functionality**: PDF reports and CSV exports
-- **User Authentication**: Save custom methodology profiles
-- **API Endpoints**: REST API for programmatic access
-- **Enhanced Visualizations**: 3D scatter plots, network graphs
-- **Methodology Templates**: Pre-configured methodology profiles from real ranking systems
-
-## 📝 Methodology Notes
-
-This platform uses **ranking-inspired approximations** based on publicly available data. It does not claim to exactly replicate proprietary ranking methodologies (e.g., ShanghaiRanking, QS, THE). Instead, it:
-
-- Uses publicly accessible research indicators
-- Implements transparent, documented weighting schemes
-- Provides methodology exploration tools
-- Focuses on understanding ranking logic rather than exact replication
-
-## 🤝 Contributing
-
-This is a portfolio project, but suggestions and feedback are welcome!
-
-## 📄 License
-
-This project is licensed under the MIT License - see the [LICENSE](LICENSE) file for details.
-
-## 👤 Author
-
-**Rafiul Alam Khan**
-
-- Portfolio: [Your Portfolio URL]
-- LinkedIn: [Your LinkedIn]
-- Email: [Your Email]
-
-## 🙏 Acknowledgments
-
-- OpenAlex for providing open access to academic data
-- Streamlit for the excellent dashboard framework
-- The academic rankings research community for methodology insights
-
----
-
-## 📋 Resume-Ready Summary
-
-**Academic Rankings Intelligence Platform** - A comprehensive Python, PostgreSQL, and Streamlit analytics platform that models and simulates global university ranking methodologies. Built end-to-end data pipeline from OpenAlex API ingestion through entity resolution, indicator engineering, normalization, and ranking computation. Implemented 5 distinct methodology profiles with interactive simulator for dynamic weight exploration. Developed 7-page Streamlit dashboard with advanced analytics including feature importance analysis, KMeans clustering, and sensitivity/volatility analysis. Designed PostgreSQL analytical database with 9 tables and 8 views supporting complex ranking queries. Demonstrates strong Python data engineering, SQL analytics, dashboard development, and methodology interpretation skills.
+Rafiul Alam Khan
+[GitHub](https://github.com/rafi-khan-cmd) · [LinkedIn](https://www.linkedin.com/in/rafiul-alam-k-3a20392b0/) · alamkhanrafiul@gmail.com

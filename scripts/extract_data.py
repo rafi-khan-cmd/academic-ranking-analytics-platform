@@ -507,8 +507,7 @@ def fetch_institution_works(
     use_cache: bool = True
 ) -> List[Dict[str, Any]]:
     """
-    ⚠️ DEPRECATED - DO NOT USE ⚠️
-    
+    DEPRECATED - DO NOT USE     
     Legacy function that accumulates full works in memory.
     This function WILL cause memory exhaustion for large institutions.
     

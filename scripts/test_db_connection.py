@@ -56,13 +56,13 @@ def test_connection():
             result.fetchone()
         
         # Success
-        print("✅ Database connection successful!")
+        print("Database connection successful!")
         print(f"   Connected to {host}:{port} using {mode} mode")
         return True
         
     except RuntimeError as e:
         # Production safeguard triggered
-        print("❌ Connection failed: Supabase credentials not loaded")
+        print("Connection failed: Supabase credentials not loaded")
         print(f"   Error: {str(e)}")
         print("\n   Please set the following in Streamlit secrets or environment variables:")
         print("   - POSTGRES_HOST")
@@ -74,7 +74,7 @@ def test_connection():
         
     except ValueError as e:
         # Missing required credentials
-        print("❌ Connection failed: Missing required database credentials")
+        print("Connection failed: Missing required database credentials")
         print(f"   Error: {str(e)}")
         print("\n   Please set all required credentials in Streamlit secrets or environment variables:")
         print("   - POSTGRES_HOST")
@@ -89,7 +89,7 @@ def test_connection():
         error_str = str(e)
         host = DB_CONFIG.get('host', 'NOT SET')
         
-        print("❌ Connection failed")
+        print("Connection failed")
         print(f"   Host: {host}")
         print(f"   Error: {error_str[:200]}")
         

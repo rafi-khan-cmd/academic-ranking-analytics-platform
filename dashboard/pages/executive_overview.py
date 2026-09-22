@@ -17,9 +17,9 @@ from scripts.config import METHODOLOGIES, DEFAULT_YEAR
 def render():
     st.header("Executive Overview")
     st.markdown("""
-    This dashboard provides a comprehensive view of global academic rankings across multiple 
-    methodology profiles. Explore how different weighting schemes affect institutional rankings 
-    and discover insights about research performance patterns.
+    Global academic rankings across five methodology profiles. Explore how different
+    weighting schemes reshuffle institutional rankings and where research performance
+    patterns show up.
     """)
     
     # Year selector
