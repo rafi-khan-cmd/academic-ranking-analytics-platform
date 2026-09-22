@@ -23,7 +23,7 @@ The Academic Rankings Intelligence Platform follows a modular, pipeline-based ar
 
 ### 4. Database Layer
 - PostgreSQL analytical database
-- Normalized schema with 9 core tables
+- Normalized schema with 16 core tables
 - 8 analytical views for dashboard access
 
 ### 5. Dashboard Layer

@@ -279,6 +279,136 @@ External ranking tables (ARWU, QS, THE, USNews, etc.).
 | created_at | TIMESTAMP | Record creation timestamp |
 | updated_at | TIMESTAMP | Record update timestamp |
 
+### subjects
+
+Subject/discipline groups used for subject-level metrics and dashboard grouping.
+
+| Column | Type | Description |
+|--------|------|-------------|
+| subject_id | SERIAL | Primary key |
+| subject_name | VARCHAR(200) | Subject name |
+| subject_group | VARCHAR(100) | Higher-level subject group |
+| created_at | TIMESTAMP | Record creation timestamp |
+
+**Indexes:**
+- `idx_subjects_group` on `subject_group`
+
+**Unique Constraint:** `subject_name`
+
+### methodology_weights
+
+Named weighting profiles used to compute composite ranking scores. The six indicator weights are constrained to sum to 1.0.
+
+| Column | Type | Description |
+|--------|------|-------------|
+| methodology_id | SERIAL | Primary key |
+| methodology_name | VARCHAR(100) | Methodology name |
+| publication_weight | NUMERIC(5,3) | Weight on publication score |
+| citation_weight | NUMERIC(5,3) | Weight on citation score |
+| collaboration_weight | NUMERIC(5,3) | Weight on collaboration score |
+| quality_weight | NUMERIC(5,3) | Weight on quality score |
+| subject_strength_weight | NUMERIC(5,3) | Weight on subject strength score |
+| productivity_weight | NUMERIC(5,3) | Weight on productivity score |
+| description | TEXT | Human-readable description of the profile |
+| created_at | TIMESTAMP | Record creation timestamp |
+
+**Unique Constraint:** `methodology_name`
+
+**Check Constraint:** the six weights must sum to 1.0 (within 0.001).
+
+### ranking_results
+
+Computed institution rankings for a given methodology, year, and (optional) subject.
+
+| Column | Type | Description |
+|--------|------|-------------|
+| ranking_id | SERIAL | Primary key |
+| institution_id | INTEGER | Foreign key to institutions |
+| subject_id | INTEGER | Foreign key to subjects (NULL for overall) |
+| year | INTEGER | Ranking year |
+| methodology_name | VARCHAR(100) | Foreign key to methodology_weights |
+| overall_score | NUMERIC(10,6) | Composite score |
+| rank_position | INTEGER | Rank position |
+| created_at | TIMESTAMP | Record creation timestamp |
+
+**Indexes:**
+- `idx_ranking_results_institution` on `institution_id`
+- `idx_ranking_results_subject` on `subject_id`
+- `idx_ranking_results_methodology` on `methodology_name`
+- `idx_ranking_results_year` on `year`
+- `idx_ranking_results_rank` on `rank_position`
+
+**Unique Constraint:** `(institution_id, subject_id, year, methodology_name)`
+
+### institution_clusters
+
+Cluster assignments from unsupervised grouping of institutions.
+
+| Column | Type | Description |
+|--------|------|-------------|
+| cluster_id | SERIAL | Primary key |
+| institution_id | INTEGER | Foreign key to institutions |
+| cluster_label | VARCHAR(100) | Cluster label |
+| cluster_description | TEXT | Cluster description |
+| cluster_method | VARCHAR(50) | Clustering method (default 'kmeans') |
+| n_clusters | INTEGER | Number of clusters used |
+| created_at | TIMESTAMP | Record creation timestamp |
+
+**Indexes:**
+- `idx_clusters_institution` on `institution_id`
+- `idx_clusters_label` on `cluster_label`
+
+**Unique Constraint:** `(institution_id, cluster_method)`
+
+### sensitivity_results
+
+Rank stability for each institution across methodologies -- how much its rank moves as the weighting profile changes.
+
+| Column | Type | Description |
+|--------|------|-------------|
+| sensitivity_id | SERIAL | Primary key |
+| institution_id | INTEGER | Foreign key to institutions |
+| subject_id | INTEGER | Foreign key to subjects (NULL for overall) |
+| year | INTEGER | Year |
+| volatility_score | NUMERIC(10,6) | Rank volatility across methodologies |
+| average_rank | NUMERIC(10,2) | Mean rank across methodologies |
+| rank_range | INTEGER | Difference between best and worst rank |
+| methodology_count | INTEGER | Number of methodologies compared |
+| min_rank | INTEGER | Best (lowest) rank observed |
+| max_rank | INTEGER | Worst (highest) rank observed |
+| created_at | TIMESTAMP | Record creation timestamp |
+
+**Indexes:**
+- `idx_sensitivity_institution` on `institution_id`
+- `idx_sensitivity_subject` on `subject_id`
+
+**Unique Constraint:** `(institution_id, subject_id, year)`
+
+### country_summary
+
+Country-level aggregates for a methodology and year.
+
+| Column | Type | Description |
+|--------|------|-------------|
+| summary_id | SERIAL | Primary key |
+| country | VARCHAR(100) | Country name |
+| methodology_name | VARCHAR(100) | Foreign key to methodology_weights |
+| year | INTEGER | Year |
+| avg_score | NUMERIC(10,6) | Average composite score across institutions |
+| institution_count | INTEGER | Number of institutions in the country |
+| avg_publication_score | NUMERIC(10,6) | Average publication score |
+| avg_citation_score | NUMERIC(10,6) | Average citation score |
+| avg_collaboration_score | NUMERIC(10,6) | Average collaboration score |
+| avg_quality_score | NUMERIC(10,6) | Average quality score |
+| top_institution_id | INTEGER | Foreign key to the top-ranked institution |
+| created_at | TIMESTAMP | Record creation timestamp |
+
+**Indexes:**
+- `idx_country_summary_country` on `country`
+- `idx_country_summary_methodology` on `methodology_name`
+
+**Unique Constraint:** `(country, methodology_name, year)`
+
 ## Indicators
 
 ### Publication Count
